@@ -5,7 +5,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 MANIFEST = Path.home() / ".brain-sync.json"
-EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".pdf", ".txt", ".md", ".xlsx", ".csv"}
+EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".pdf", ".txt", ".md", ".xlsx", ".csv", ".docx"}
 
 
 class UploadClient:

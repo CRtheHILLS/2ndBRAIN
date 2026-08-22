@@ -1,4 +1,4 @@
-import csv, hashlib, datetime as dt
+import csv, hashlib, re, datetime as dt
 from io import BytesIO
 from pathlib import Path
 import pymupdf
@@ -76,6 +76,45 @@ def _csv_table(data: bytes, stem: str) -> str:
     rows = list(csv.reader(text.splitlines()))
     return f"## {stem}\n\n{_md_table(rows)}"
 
+_HEADING_RE = re.compile(r"^(Heading|제목)\s*(\d+)$")
+
+def _iter_docx_blocks(document):
+    """Yield paragraphs and tables in document order."""
+    import docx.table
+    import docx.text.paragraph
+    from docx.oxml.ns import qn
+    body = document.element.body
+    for child in body.iterchildren():
+        if child.tag == qn("w:p"):
+            yield docx.text.paragraph.Paragraph(child, document)
+        elif child.tag == qn("w:tbl"):
+            yield docx.table.Table(child, document)
+
+def _docx_body(data: bytes) -> str:
+    import docx
+    document = docx.Document(BytesIO(data))
+    parts = []
+    for block in _iter_docx_blocks(document):
+        if hasattr(block, "rows"):  # Table
+            rows = [[cell.text for cell in row.cells] for row in block.rows]
+            table_md = _md_table(rows)
+            if table_md:
+                parts.append(table_md)
+            continue
+        text = block.text
+        if not text.strip():
+            continue
+        style = (block.style.name if block.style else "") or ""
+        m = _HEADING_RE.match(style)
+        if m:
+            n = min(int(m.group(2)), 6)
+            parts.append("#" * n + " " + text)
+        elif "List" in style or "목록" in style:
+            parts.append("- " + text)
+        else:
+            parts.append(text)
+    return "\n\n".join(parts)
+
 def _sanitize_filename(filename: str) -> str:
     name = filename.replace("\\", "/").split("/")[-1]
     name = Path(name).name
@@ -102,6 +141,8 @@ def ingest_file(slug: str, filename: str, data: bytes) -> Path:
         kind, body = "table", _xlsx_tables(data)
     elif ext == ".csv":
         kind, body = "table", _csv_table(data, Path(filename).stem)
+    elif ext == ".docx":
+        kind, body = "doc", _docx_body(data)
     else:
         kind, body = "text", _decode_text(data)
     store.write_md(out, {"book": slug, "source": filename, "sha256": sha, "kind": kind,

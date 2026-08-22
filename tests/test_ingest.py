@@ -1,4 +1,5 @@
 from io import BytesIO
+import docx
 import openpyxl
 import pymupdf
 from PIL import Image
@@ -106,3 +107,21 @@ def test_csv_ingest_produces_markdown_table_with_korean_utf8(data_dir):
     assert "## terms" in body
     assert "| 용어 | 풀이 |" in body
     assert "| 우주 | 넓다 |" in body
+
+def test_docx_ingest_renders_heading_and_table(data_dir):
+    document = docx.Document()
+    document.add_heading("우주론 개요", level=1)
+    document.add_paragraph("우주는 넓다.")
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "용어"
+    table.cell(0, 1).text = "풀이"
+    table.cell(1, 0).text = "우주"
+    table.cell(1, 1).text = "넓다"
+    buf = BytesIO()
+    document.save(buf)
+    p = ingest.ingest_file("cosmos", "notes.docx", buf.getvalue())
+    meta, body = store.read_md(p)
+    assert meta["kind"] == "doc"
+    assert "# 우주론 개요" in body
+    assert "| 용어 | 풀이 |" in body
+    assert (store.raw_dir("cosmos") / "notes.docx").exists()
