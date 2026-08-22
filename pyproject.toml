@@ -20,3 +20,5 @@ brain-sync = "sync.watcher:main"
 testpaths = ["tests"]
 [tool.setuptools.packages.find]
 include = ["brain*", "api*", "sync*"]
+[tool.setuptools.package-data]
+brain = ["templates/*.j2", "static/*.css"]

@@ -1,0 +1,15 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ book.title }} · 2nd BRAIN</title><link rel="stylesheet" href="../brain.css"></head>
+<body data-default="{{ default }}">
+<header><a href="../index.html">← 서재</a><h1>{{ book.title }}</h1>
+<nav class="levels" role="tablist">
+{% for name in ["초등","일반","전문"] %}<button role="tab" data-level="{{ name }}">🎚️ {{ name }}</button>{% endfor %}
+</nav></header>
+<main>{% for name, html in levels.items() %}<section data-level="{{ name }}" hidden>{{ html|safe }}</section>{% endfor %}</main>
+<script>
+const show=l=>{document.querySelectorAll('section[data-level]').forEach(s=>s.hidden=s.dataset.level!==l);
+document.querySelectorAll('button[data-level]').forEach(b=>b.setAttribute('aria-selected',b.dataset.level===l));
+try{localStorage.setItem('lvl:{{ book.slug }}',l)}catch(e){}};
+let l=document.body.dataset.default;try{l=localStorage.getItem('lvl:{{ book.slug }}')||l}catch(e){}
+document.querySelectorAll('button[data-level]').forEach(b=>b.onclick=()=>show(b.dataset.level));show(l);
+</script></body></html>

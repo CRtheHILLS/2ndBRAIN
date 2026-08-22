@@ -1,0 +1,11 @@
+:root{--bg:#fbf7f2;--ink:#2a2118;--accent:#c2185b;--card:#fff;--muted:#7a6a5e}
+@media(prefers-color-scheme:dark){:root{--bg:#1b1614;--ink:#f3ebe3;--accent:#ff6f9c;--card:#26201d;--muted:#b8a79a}}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.7 "Pretendard","Noto Sans KR",system-ui,sans-serif}
+header{padding:2rem 1.5rem 1rem;max-width:860px;margin:auto}h1{font-size:2rem;margin:.3rem 0}
+.levels{display:flex;gap:.5rem;margin-top:1rem}.levels button{border:1px solid var(--accent);background:transparent;color:var(--accent);border-radius:999px;padding:.4rem 1rem;cursor:pointer}
+.levels button[aria-selected="true"]{background:var(--accent);color:#fff}
+main{max-width:860px;margin:auto;padding:0 1.5rem 4rem}section{background:var(--card);border-radius:16px;padding:1.5rem;box-shadow:0 6px 24px rgba(0,0,0,.06)}
+blockquote{border-left:4px solid var(--accent);margin:1rem 0;padding:.2rem 1rem;color:var(--muted)}
+mark{background:#ffe08a}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:.4rem}
+.shelf{display:grid;gap:1rem;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}.book{display:block;background:var(--card);padding:1rem;border-radius:12px;text-decoration:none;color:inherit}
+.book span{display:block;color:var(--muted);font-size:.85rem}.sub{color:var(--muted)}
