@@ -8,7 +8,8 @@ Phase: **0 Foundation** (not started). Owner: CR. Persona: Clair.
 ## Pending
 - [ ] CR: choose execution mode (subagent-driven vs inline) and provide ANTHROPIC_API_KEY for Railway
 - [x] Task 1 scaffold
-- [ ] Task 2–10 of Phase 0 plan
+- [x] Task 2 store
+- [ ] Task 3–10 of Phase 0 plan
 - [ ] First real book in ~/Desktop/2ndBRAIN/<책이름>/
 
 ## Rules to remember each session
