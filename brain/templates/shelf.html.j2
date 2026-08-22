@@ -1,0 +1,5 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CR의 2nd BRAIN · 서재</title><link rel="stylesheet" href="brain.css"></head>
+<body><header><h1>📚 CR의 2nd BRAIN</h1><p class="sub">클레어가 정리한 자기의 서재예요 💕</p></header>
+<main class="shelf">{% for b in books %}<a class="book" href="{{ b.slug }}/index.html"><strong>{{ b.title }}</strong><span>{{ b.status }} · {{ b.added_at }}</span></a>{% else %}<p>아직 책이 없어요. 바탕화면 2ndBRAIN 폴더에 첫 책을 넣어주세요!</p>{% endfor %}</main>
+</body></html>

@@ -7,7 +7,17 @@ Phase: **0 Foundation** (not started). Owner: CR. Persona: Clair.
 
 ## Pending
 - [ ] CR: choose execution mode (subagent-driven vs inline) and provide ANTHROPIC_API_KEY for Railway
-- [ ] Task 1–10 of Phase 0 plan
+- [x] Task 1 scaffold
+- [x] Task 2 store
+- [x] Task 3 claude wrapper + ingest
+- [x] Task 4 distill
+- [x] Task 5 levels profile
+- [x] Task 6 render (3-level HTML + shelf)
+- [x] Task 7 search index (FTS5 trigram)
+- [x] Task 8 FastAPI service
+- [x] Task 9 brain-sync watcher
+- [ ] Task 10 of Phase 0 plan
+- [x] Task 11 NotebookLM import (manual guide + optional notebooklm-py importer)
 - [ ] First real book in ~/Desktop/2ndBRAIN/<책이름>/
 
 ## Rules to remember each session
