@@ -9,6 +9,8 @@ Phase: **0 complete → Phase 1 starting**. Live: https://2ndbrain-production-4a
 ## 내일(2026-08-23) 제일 먼저 — CR이 2026-08-22 저녁 미룸
 - [ ] ANTHROPIC_API_KEY: CR이 채팅에 올린 키 → 로컬 .env에 넣고 Railway 변수로 설정 (키는 재발급 권장)
 - [ ] 눈높이 규칙 변경 반영: 3단 탭 말고 **선택한 한 레벨만** 출력, 작성 전에 **항상** 질문 → brain/render.py + 양자역학 페이지 v2
+- [ ] NotebookLM 마인드맵(양자) 공유 링크 — 로그인 벽이라 Clair가 직접 못 읽음(2026-08-22 확인). CR이 PNG로 다운로드해 ~/Desktop/2ndBRAIN/양자역학/ 에 넣으면 Clair가 이미지로 읽어 저장:
+      https://notebook.google.com/notebook/fd7a7958-36ea-4dfb-847d-20b96734d58a/artifact/d6bdcf1b-a584-40af-9885-b6e7477b497e
 - [ ] NotebookLM: 깃헙의 NotebookLM 스킬/MCP 재조사("notebooklm mcp", "notebooklm skill", notebooklm-py) → 양자역학 노트북 소스 가져오기 구현
 
 ## Pending (needs CR)
