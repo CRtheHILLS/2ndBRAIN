@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depends
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depends, Request
+from fastapi.responses import RedirectResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from brain import store, ingest, distill, render, index, levels
 from brain.config import get_settings
@@ -10,12 +10,21 @@ from brain.slug import slugify
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if get_settings().brain_token in ("", "change-me"):
+        raise RuntimeError("BRAIN_TOKEN must be set")
     render.render_shelf()
     app.mount("/site", StaticFiles(directory=store.site_dir(), html=True), name="site")
     yield
 
 
 app = FastAPI(title="2nd BRAIN", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def _no_index_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    return response
 
 
 def require_token(x_brain_token: str = Header(default="")):
@@ -26,6 +35,11 @@ def require_token(x_brain_token: str = Header(default="")):
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/robots.txt")
+def robots_txt():
+    return PlainTextResponse("User-agent: *\nDisallow: /")
 
 
 @app.post("/upload", dependencies=[Depends(require_token)])
@@ -43,9 +57,17 @@ async def upload(book: str = Form(...), file: UploadFile = File(...)):
 def process(slug: str, level: str = "일반"):
     if slugify(slug) != slug:
         raise HTTPException(400, "bad slug")
+    if level not in levels.LEVELS:
+        raise HTTPException(400, "bad level")
+    if not list(store.raw_dir(slug).glob("*.md")):
+        raise HTTPException(400, "책에 아직 자료가 없어요")
     levels.set_level(slug, level)
-    d = distill.distill_book(slug)
-    render.render_book(slug, default_level=level)
+    try:
+        d = distill.distill_book(slug)
+    except ValueError as e:
+        raise HTTPException(502, str(e))
+    # distill just rewrote the notes, so any previously cached level HTML is stale
+    render.render_book(slug, default_level=level, use_cache=False)
     n = index.rebuild()
     return {"concepts": len(d["concepts"]), "page": f"/site/{slug}/index.html", "indexed": n}
 

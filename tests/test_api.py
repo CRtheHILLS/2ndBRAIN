@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -74,3 +75,69 @@ def test_process_rejects_invalid_slug(data_dir):
     with TestClient(app) as c:
         r = c.post("/books/../x/process", headers={"X-Brain-Token": "test-token"})
     assert r.status_code in (400, 404)
+
+
+def test_robots_txt(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        r = c.get("/robots.txt")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
+    assert r.text == "User-agent: *\nDisallow: /"
+
+
+def test_responses_have_no_index_header(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        r = c.get("/health")
+    assert r.headers["x-robots-tag"] == "noindex, nofollow"
+
+
+def test_process_rejects_invalid_level(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        c.post("/upload", headers={"X-Brain-Token": "test-token"},
+               data={"book": "코스모스"}, files={"file": ("a.txt", "우주".encode())})
+        r = c.post("/books/코스모스/process", params={"level": "고급"},
+                   headers={"X-Brain-Token": "test-token"})
+    assert r.status_code == 400
+
+
+def test_process_rejects_book_with_no_material(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        r = c.post("/books/코스모스/process", headers={"X-Brain-Token": "test-token"})
+    assert r.status_code == 400
+    assert "자료" in r.json()["detail"]
+
+
+def test_process_returns_502_on_unparseable_llm_response(data_dir, monkeypatch):
+    from api.main import app
+    from brain import distill
+    with TestClient(app) as c:
+        c.post("/upload", headers={"X-Brain-Token": "test-token"},
+               data={"book": "코스모스"}, files={"file": ("a.txt", "우주".encode())})
+        monkeypatch.setattr(distill, "distill_book",
+                             lambda slug: (_ for _ in ()).throw(ValueError("모델 응답 파싱 실패 — notes/.last-distill.txt 확인")))
+        r = c.post("/books/코스모스/process", headers={"X-Brain-Token": "test-token"})
+    assert r.status_code == 502
+
+
+def test_startup_fails_without_brain_token(tmp_path, monkeypatch):
+    import asyncio
+    from brain import config
+    from api.main import app, lifespan
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("BRAIN_TOKEN", "change-me")
+    config.get_settings.cache_clear()
+
+    async def _enter():
+        async with lifespan(app):
+            pass
+
+    try:
+        with pytest.raises(RuntimeError):
+            asyncio.run(_enter())
+    finally:
+        config.get_settings.cache_clear()
