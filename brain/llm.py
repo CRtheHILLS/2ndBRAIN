@@ -9,16 +9,21 @@ OCR_SYSTEM = ("You transcribe book pages photographed by the reader. Output the 
 
 def _client(): return Anthropic(api_key=get_settings().anthropic_api_key)
 
+def _first_text(r) -> str:
+    if r.stop_reason == "max_tokens":
+        raise RuntimeError("model output truncated")
+    return next(b.text for b in r.content if getattr(b, "type", "") == "text")
+
 def ocr_image(image_bytes: bytes, mime: str) -> str:
     r = _client().messages.create(model=get_settings().model_fast, max_tokens=4000, system=OCR_SYSTEM,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": mime,
                                           "data": base64.b64encode(image_bytes).decode()}},
             {"type": "text", "text": "Transcribe this page."}]}])
-    return r.content[0].text
+    return _first_text(r)
 
 def complete(system: str, user: str, smart: bool = False) -> str:
     s = get_settings()
     r = _client().messages.create(model=s.model_smart if smart else s.model_fast, max_tokens=8000,
         system=system, messages=[{"role": "user", "content": user}])
-    return r.content[0].text
+    return _first_text(r)
