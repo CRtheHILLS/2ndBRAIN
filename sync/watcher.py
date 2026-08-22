@@ -1,4 +1,4 @@
-import argparse, hashlib, json, time
+import argparse, hashlib, json, os, sys, time
 from pathlib import Path
 import httpx
 from watchdog.observers import Observer
@@ -47,13 +47,21 @@ def sync_once(root: Path, client) -> int:
 
 
 def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     a = argparse.ArgumentParser()
     a.add_argument("--root", default=str(Path.home() / "Desktop" / "2ndBRAIN"))
     a.add_argument("--url", required=True)
-    a.add_argument("--token", required=True)
+    a.add_argument("--token", default=None)
     a.add_argument("--once", action="store_true")
     ns = a.parse_args()
-    root, client = Path(ns.root), UploadClient(ns.url, ns.token)
+    token = ns.token or os.environ.get("BRAIN_TOKEN")
+    if not token:
+        a.error("--token or BRAIN_TOKEN env var is required")
+    root, client = Path(ns.root), UploadClient(ns.url, token)
     sync_once(root, client)
     if ns.once:
         return
