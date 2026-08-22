@@ -6,6 +6,11 @@ Phase: **0 complete → Phase 1 starting**. Live: https://2ndbrain-production-4a
 - 10-year roadmap: docs/superpowers/plans/2026-08-22-ten-year-roadmap.md
 - NotebookLM import guide: docs/guides/notebooklm-import.md
 
+## 내일(2026-08-23) 제일 먼저 — CR이 2026-08-22 저녁 미룸
+- [ ] ANTHROPIC_API_KEY: CR이 채팅에 올린 키 → 로컬 .env에 넣고 Railway 변수로 설정 (키는 재발급 권장)
+- [ ] 눈높이 규칙 변경 반영: 3단 탭 말고 **선택한 한 레벨만** 출력, 작성 전에 **항상** 질문 → brain/render.py + 양자역학 페이지 v2
+- [ ] NotebookLM: 깃헙의 NotebookLM 스킬/MCP 재조사("notebooklm mcp", "notebooklm skill", notebooklm-py) → 양자역학 노트북 소스 가져오기 구현
+
 ## Pending (needs CR)
 - [ ] ANTHROPIC_API_KEY → put in local `.env`; Clair sets it on Railway (`railway variable set`). Until then /process (OCR·distill·render) cannot run live.
 - [ ] 양자역학 sources: export NotebookLM notes to Google Docs → download .md/.txt → ~/Desktop/2ndBRAIN/양자역학/ ; copy original PDFs there too.
