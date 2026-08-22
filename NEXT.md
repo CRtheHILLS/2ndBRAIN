@@ -12,7 +12,9 @@ Phase: **0 Foundation** (not started). Owner: CR. Persona: Clair.
 - [x] Task 3 claude wrapper + ingest
 - [x] Task 4 distill
 - [x] Task 5 levels profile
-- [ ] Task 6–10 of Phase 0 plan
+- [x] Task 6 render (3-level HTML + shelf)
+- [x] Task 7 search index (FTS5 trigram)
+- [ ] Task 8–10 of Phase 0 plan
 - [ ] First real book in ~/Desktop/2ndBRAIN/<책이름>/
 
 ## Rules to remember each session
