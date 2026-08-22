@@ -1,4 +1,4 @@
-import json, re
+import json
 from . import llm, store
 
 DISTILL_SYSTEM = """You are Clair, CR's knowledge companion. From the raw page transcriptions of ONE book, produce JSON only:
@@ -13,9 +13,17 @@ def _md_list(items, fmt): return "\n".join(fmt(i) for i in items) + "\n"
 def distill_book(slug: str) -> dict:
     text = "\n\n".join(store.read_md(p)[1] for p in sorted(store.raw_dir(slug).glob("*.md")))
     raw = llm.complete(DISTILL_SYSTEM, text, smart=True)
-    raw = re.sub(r"^```(json)?|```$", "", raw.strip(), flags=re.M)
-    d = json.loads(raw)
-    n = store.notes_dir(slug); m = {"book": slug}
+    n = store.notes_dir(slug)
+    (n / ".last-distill.txt").write_text(raw, encoding="utf-8")
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("모델 응답 파싱 실패 — notes/.last-distill.txt 확인")
+    try:
+        d = json.loads(raw[start:end + 1])
+    except json.JSONDecodeError:
+        raise ValueError("모델 응답 파싱 실패 — notes/.last-distill.txt 확인")
+    m = {"book": slug}
     store.write_md(n / "summary.md", m, d["summary"])
     store.write_md(n / "concepts.md", m, _md_list(d["concepts"],
         lambda c: f"## {c['name']}\n{c['explain']}\n\n**왜 중요해?** {c['why_it_matters']}\n"))
