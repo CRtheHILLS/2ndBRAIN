@@ -1,4 +1,5 @@
 from io import BytesIO
+import openpyxl
 import pymupdf
 from PIL import Image
 from brain import ingest, store
@@ -76,3 +77,32 @@ def test_pdf_ingest_extracts_text_and_ocrs_blank_page(data_dir, monkeypatch):
     assert "Hello Test Page" in body
     assert "OCR" in body
     assert len(calls) == 1
+
+def test_xlsx_ingest_produces_markdown_tables(data_dir):
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "용어"
+    ws1.append(["용어", "풀이"])
+    ws1.append(["a|b", "line1\nline2"])
+    ws2 = wb.create_sheet("Sheet2")
+    ws2.append(["x", "y"])
+    ws2.append([1, 2])
+    buf = BytesIO()
+    wb.save(buf)
+    p = ingest.ingest_file("cosmos", "glossary.xlsx", buf.getvalue())
+    meta, body = store.read_md(p)
+    assert meta["kind"] == "table"
+    assert "## 용어" in body
+    assert "## Sheet2" in body
+    assert "a\\|b" in body
+    assert "line1<br>line2" in body
+    assert (store.raw_dir("cosmos") / "glossary.xlsx").exists()
+
+def test_csv_ingest_produces_markdown_table_with_korean_utf8(data_dir):
+    csv_bytes = "용어,풀이\n우주,넓다\n".encode("utf-8")
+    p = ingest.ingest_file("cosmos", "terms.csv", csv_bytes)
+    meta, body = store.read_md(p)
+    assert meta["kind"] == "table"
+    assert "## terms" in body
+    assert "| 용어 | 풀이 |" in body
+    assert "| 우주 | 넓다 |" in body

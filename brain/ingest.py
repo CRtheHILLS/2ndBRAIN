@@ -1,4 +1,4 @@
-import hashlib, datetime as dt
+import csv, hashlib, datetime as dt
 from io import BytesIO
 from pathlib import Path
 import pymupdf
@@ -40,6 +40,42 @@ def _decode_text(data: bytes) -> str:
         except UnicodeDecodeError:
             return data.decode("utf-8", errors="replace")
 
+def _escape_cell(v) -> str:
+    s = "" if v is None else str(v)
+    s = s.replace("|", "\\|")
+    for nl in ("\r\n", "\r", "\n"):
+        s = s.replace(nl, "<br>")
+    return s
+
+def _md_table(rows: list) -> str:
+    rows = [list(r) for r in rows]
+    if not rows:
+        return ""
+    header, *body = rows
+    header = [_escape_cell(c) for c in header]
+    lines = ["| " + " | ".join(header) + " |",
+              "| " + " | ".join(["---"] * len(header)) + " |"]
+    for row in body:
+        lines.append("| " + " | ".join(_escape_cell(c) for c in row) + " |")
+    return "\n".join(lines)
+
+def _xlsx_tables(data: bytes) -> str:
+    import openpyxl
+    wb = openpyxl.load_workbook(BytesIO(data), read_only=True, data_only=True)
+    try:
+        parts = []
+        for ws in wb.worksheets:
+            rows = list(ws.iter_rows(values_only=True))
+            parts.append(f"## {ws.title}\n\n{_md_table(rows)}")
+        return "\n\n".join(parts)
+    finally:
+        wb.close()
+
+def _csv_table(data: bytes, stem: str) -> str:
+    text = _decode_text(data)
+    rows = list(csv.reader(text.splitlines()))
+    return f"## {stem}\n\n{_md_table(rows)}"
+
 def _sanitize_filename(filename: str) -> str:
     name = filename.replace("\\", "/").split("/")[-1]
     name = Path(name).name
@@ -62,6 +98,10 @@ def ingest_file(slug: str, filename: str, data: bytes) -> Path:
         kind, body = "image", llm.ocr_image(data, IMG[ext])
     elif ext == ".pdf":
         kind, body = "pdf", _pdf_text(data)
+    elif ext == ".xlsx":
+        kind, body = "table", _xlsx_tables(data)
+    elif ext == ".csv":
+        kind, body = "table", _csv_table(data, Path(filename).stem)
     else:
         kind, body = "text", _decode_text(data)
     store.write_md(out, {"book": slug, "source": filename, "sha256": sha, "kind": kind,

@@ -21,6 +21,15 @@ def test_sync_once_uploads_new_only(tmp_path, monkeypatch):
     assert watcher.sync_once(tmp_path, f) == 0
 
 
+def test_sync_once_uploads_xlsx(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "MANIFEST", tmp_path / "m.json")
+    d = tmp_path / "코스모스"
+    d.mkdir()
+    (d / "table.xlsx").write_bytes(b"x")
+    f = Fake()
+    assert watcher.sync_once(tmp_path, f) == 1 and f.calls == [("코스모스", "table.xlsx")]
+
+
 def test_sync_once_skips_hidden_and_temp_files(tmp_path, monkeypatch):
     monkeypatch.setattr(watcher, "MANIFEST", tmp_path / "m.json")
     d = tmp_path / "코스모스"
