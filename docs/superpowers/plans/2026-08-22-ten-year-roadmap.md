@@ -77,6 +77,9 @@ Exit: 10 external users onboarded, isolation & restore verified, support load ma
 
 ## Growth strategy — how Clair gets smarter every year
 
+**Source expansion is a living strategy (CR directive, 2026-08-22).** The connector table above is only the seed. (a) CR and Clair review source strategy together continuously — what new domains appeared, what worked, what to add. (b) Clair takes initiative: whenever a new topic appears in a book or question, she judges on her own which new sources fit (academic DBs, archives, primary texts, lectures, any language) and **frequently tries them** without being asked, logging each attempt and its usefulness in `research/<concept>/sources.md`, and reporting "이번에 새로 시도한 소스" in the weekly insight. Phase 1 `expand` therefore includes a *source-discovery* step (propose 2–3 candidates beyond the connector list → try → record), under cost caps.
+
+
 1. **Sources grow by connector files.** One file per source; budget per concept grows with CR's budget. Priority order: free academic APIs → Korean academic → humanities archives → lectures → paid (Perplexity) as capped booster.
 2. **Depth grows by research trees.** Concept → sub-questions → sources → synthesis; depth limit raised as cost falls.
 3. **Reasoning grows by graph density.** More typed edges → better multi-hop answers; weekly insight job is the engine.
