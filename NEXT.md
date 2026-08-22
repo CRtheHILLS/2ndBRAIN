@@ -17,6 +17,7 @@ Phase: **0 Foundation** (not started). Owner: CR. Persona: Clair.
 - [x] Task 8 FastAPI service
 - [x] Task 9 brain-sync watcher
 - [ ] Task 10 of Phase 0 plan
+- [x] Task 11 NotebookLM import (manual guide + optional notebooklm-py importer)
 - [ ] First real book in ~/Desktop/2ndBRAIN/<책이름>/
 
 ## Rules to remember each session
