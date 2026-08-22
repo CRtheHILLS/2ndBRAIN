@@ -16,7 +16,16 @@ def _pdf_text(data: bytes) -> str:
         out.append(f"\n\n<!-- page {i} -->\n{t}")
     return "".join(out)
 
+def _sanitize_filename(filename: str) -> str:
+    name = filename.replace("\\", "/").split("/")[-1]
+    name = Path(name).name
+    if not name or name in ("..", "."):
+        raise ValueError(f"invalid filename: {filename!r}")
+    return name
+
+
 def ingest_file(slug: str, filename: str, data: bytes) -> Path:
+    filename = _sanitize_filename(filename)
     sha = hashlib.sha256(data).hexdigest()
     ext = Path(filename).suffix.lower()
     out = store.raw_dir(slug) / (Path(filename).stem + ".md")

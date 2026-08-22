@@ -14,3 +14,25 @@ def test_idempotent(data_dir):
     a = ingest.ingest_file("cosmos", "a.txt", b"same")
     b = ingest.ingest_file("cosmos", "a.txt", b"same")
     assert a == b
+
+def test_path_traversal_filename_is_sanitized(data_dir):
+    p = ingest.ingest_file("cosmos", "../../evil.txt", b"pwned")
+    assert p.name == "evil.md"
+    assert p.parent == store.raw_dir("cosmos")
+    assert (store.raw_dir("cosmos") / "evil.txt").exists()
+    assert not (data_dir / "evil.txt").exists()
+
+def test_backslash_path_traversal_filename_is_sanitized(data_dir):
+    p = ingest.ingest_file("cosmos", "..\\..\\evil2.txt", b"pwned")
+    assert p.parent == store.raw_dir("cosmos")
+    assert (store.raw_dir("cosmos") / "evil2.txt").exists()
+
+def test_dotdot_filename_rejected(data_dir):
+    import pytest
+    with pytest.raises(ValueError):
+        ingest.ingest_file("cosmos", "..", b"x")
+
+def test_empty_filename_rejected(data_dir):
+    import pytest
+    with pytest.raises(ValueError):
+        ingest.ingest_file("cosmos", "", b"x")

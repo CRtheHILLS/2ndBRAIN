@@ -32,12 +32,17 @@ def health():
 async def upload(book: str = Form(...), file: UploadFile = File(...)):
     slug = slugify(book)
     store.upsert_book(slug, book)
-    p = ingest.ingest_file(slug, file.filename, await file.read())
+    try:
+        p = ingest.ingest_file(slug, file.filename, await file.read())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"slug": slug, "path": str(p)}
 
 
 @app.post("/books/{slug}/process", dependencies=[Depends(require_token)])
 def process(slug: str, level: str = "일반"):
+    if slugify(slug) != slug:
+        raise HTTPException(400, "bad slug")
     levels.set_level(slug, level)
     d = distill.distill_book(slug)
     render.render_book(slug, default_level=level)

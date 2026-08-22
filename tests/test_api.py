@@ -45,3 +45,32 @@ def test_process_requires_token(data_dir):
     with TestClient(app) as c:
         r = c.post("/books/코스모스/process")
     assert r.status_code == 401
+
+
+def test_upload_sanitizes_path_traversal_filename(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        r = c.post("/upload", headers={"X-Brain-Token": "test-token"},
+                   data={"book": "코스모스"},
+                   files={"file": ("../../evil.txt", b"pwned")})
+    assert r.status_code == 200
+    hits = list(data_dir.rglob("evil.txt"))
+    assert len(hits) == 1
+    assert data_dir in hits[0].parents
+    assert hits[0].relative_to(data_dir).parts[0] == "books"
+    assert not (data_dir.parent / "evil.txt").exists()
+
+
+def test_upload_rejects_dotdot_filename(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        r = c.post("/upload", headers={"X-Brain-Token": "test-token"},
+                   data={"book": "코스모스"}, files={"file": ("..", b"x")})
+    assert r.status_code == 400
+
+
+def test_process_rejects_invalid_slug(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        r = c.post("/books/../x/process", headers={"X-Brain-Token": "test-token"})
+    assert r.status_code in (400, 404)
