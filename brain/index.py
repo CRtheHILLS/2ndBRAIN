@@ -22,8 +22,13 @@ def rebuild() -> int:
     return n
 
 def search(q: str, k: int = 10) -> list[dict]:
-    match_q = '"' + q.replace('"', '""') + '"'
+    long_terms = [t for t in q.split() if len(t) >= 3]
     with closing(_db()) as con:
-        rows = con.execute("SELECT slug, path, snippet(docs, 2, '<mark>', '</mark>', '…', 12), bm25(docs) "
-                           "FROM docs WHERE docs MATCH ? ORDER BY bm25(docs) LIMIT ?", (match_q, k)).fetchall()
+        if long_terms:
+            match_q = " AND ".join('"' + t.replace('"', '""') + '"' for t in long_terms)
+            rows = con.execute("SELECT slug, path, snippet(docs, 2, '<mark>', '</mark>', '…', 12), bm25(docs) "
+                               "FROM docs WHERE docs MATCH ? ORDER BY bm25(docs) LIMIT ?", (match_q, k)).fetchall()
+        else:
+            rows = con.execute("SELECT slug, path, substr(body,1,200), 0 FROM docs WHERE body LIKE ? LIMIT ?",
+                               (f"%{q}%", k)).fetchall()
     return [{"slug": s, "path": p, "snippet": sn, "score": sc} for s, p, sn, sc in rows]
