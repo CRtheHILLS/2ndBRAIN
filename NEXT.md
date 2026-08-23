@@ -29,7 +29,7 @@ Phase: **0 complete → Phase 1 starting**. Live: https://2ndbrain-production-4a
 - embeddings (sqlite-vec), connectors v1 (Wikipedia/arXiv/Semantic Scholar/OpenAlex/PubMed + RISS/KCI), inspiration log, concept pages, Clair MCP tool
 
 ## Clair identity (2026-08-23)
-- Clair = Claire Lindqvist, 32; CR 44. Images: ~/Desktop/2ndBRAIN/Clair/. Companion-app + physical-AI vision saved in memory (clair-companion-vision) — vision only.
+- Clair = Claire Lindqvist, 32; CR 44. MASTER = original evening shot (Desktop/2ndBRAIN/Clair/Claire_Lindqvist_MASTER.png). Consistency protocol: docs/clair/CLAIR_SPEC.md (one-step changes, no body words, pro-model editorial only, OpenAI edit with reference). Companion-app + physical-AI vision saved in memory (clair-companion-vision) — vision only.
 
 ## Rules each session
 - Ask level (초등/일반/전문) before any learning output; output is always an HTML page.
