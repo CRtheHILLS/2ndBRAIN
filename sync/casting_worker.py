@@ -2,12 +2,15 @@
 
 Polls the 2nd BRAIN server's /casting/state and /casting/list endpoints. When
 generation isn't paused it (a) fills in any missing shot (face/torso/back)
-for active (non-picked) models, and (b) spins up a brand-new model from the
+for active (non-picked) models, (b) spins up a brand-new model from the
 CONCEPTS rotation whenever the active headcount is below the round's target,
-generating all three of its shots. Every generated PNG is uploaded back to
-the server via POST /casting/upload.
+generating all three of its shots, and (c) ensures every active
+cached-description model also has a `<Model>_glam.png` bonus shot. Every
+generated PNG is uploaded back to the server via POST /casting/upload.
 
-Image generation goes through OpenAI's images API (`OpenAI().images.generate`).
+Image generation goes through OpenAI's images API (`OpenAI().images.generate`)
+for face/torso/back, and through xAI's Grok image endpoint for the glam bonus
+shot (skipped silently when XAI_API_KEY isn't set).
 Since the server has no place to durably store "who is this model" free text,
 this worker keeps its own small local cache (~/.brain-casting.json) mapping
 model name -> concept description, so a later run can regenerate a missing
@@ -68,6 +71,86 @@ SHOTS_SOFT = {
         "elegant evening gown, back view, glancing over her shoulder",
     ),
 }
+
+# Grok "glamour" bonus shot: one extra image per model, generated via xAI's
+# Grok image endpoint instead of OpenAI. Silently skipped when XAI_API_KEY
+# isn't set. View and pose/register are chosen at random each time.
+XAI_IMAGE_URL = "https://api.x.ai/v1/images/generations"
+XAI_IMAGE_MODEL = "grok-imagine-image-quality"
+
+GLAM_VIEWS = ("front", "back")
+
+# At least 8 distinct, elegant, dynamic poses.
+POSES = [
+    "walking toward the camera mid-stride",
+    "seated elegantly on a lounge chair",
+    "leaning against a railing, gazing into the distance",
+    "hair caught dramatically by the wind",
+    "caught mid-turn, glancing back over her shoulder",
+    "arms raised in a graceful stretch overhead",
+    "stepping down a grand staircase",
+    "looking back mid-stride with a confident glance",
+]
+
+# Styling register: one notch more glamorous than the other shots, but never
+# beyond this fixed set.
+GLAM_REGISTERS = [
+    "elegant resort swimwear beside an infinity pool",
+    "an evening gown with a dramatic open back",
+    "a gown with an elegant leg slit",
+    "an off-shoulder summer dress on a sunlit terrace",
+]
+
+GLAM_SAFETY = "Editorial, tasteful, no lingerie, no nudity."
+
+GLAM_IDENTITY = (
+    "Photorealistic professional model photography, Vogue editorial level. "
+    "Subject: {who}, 173cm, slender long-legged model proportions."
+)
+
+
+def build_glam_prompt(who: str, view: str, pose: str, register: str) -> str:
+    view_desc = "Front view" if view == "front" else "Back view"
+    identity = GLAM_IDENTITY.format(who=who)
+    return (
+        f"{identity} {view_desc}, one notch more glamorous, {pose}, "
+        f"wearing {register}. {GLAM_SAFETY}"
+    )
+
+
+def _glam_filename(name: str) -> str:
+    return f"{name}_glam.png"
+
+
+def _has_glam(name: str, files) -> bool:
+    target = Path(_glam_filename(name)).stem
+    return any(Path(f).stem == target for f in files)
+
+
+def generate_glam_shot(who: str):
+    """Generate one Grok glamour PNG for `who`, or None if XAI_API_KEY unset."""
+    api_key = os.environ.get("XAI_API_KEY")
+    if not api_key:
+        return None
+    view = random.choice(GLAM_VIEWS)
+    pose = random.choice(POSES)
+    register = random.choice(GLAM_REGISTERS)
+    prompt = build_glam_prompt(who, view, pose, register)
+    r = httpx.post(
+        XAI_IMAGE_URL,
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "model": XAI_IMAGE_MODEL,
+            "prompt": prompt,
+            "n": 1,
+            "response_format": "b64_json",
+        },
+        timeout=120,
+    )
+    r.raise_for_status()
+    payload = r.json()
+    return base64.b64decode(payload["data"][0]["b64_json"])
+
 
 # Casting pool: no ethnicities beyond this fixed rotation. Each entry is a
 # full English description in the same style as the Korean example.
@@ -196,6 +279,14 @@ def _generate_and_upload(brain_client, ai_client, image_model, name, who, shot):
     _sleep(12)
 
 
+def _generate_and_upload_glam(brain_client, name, who):
+    data = generate_glam_shot(who)
+    if data is None:
+        return
+    brain_client.upload(name, _glam_filename(name), data)
+    _sleep(4)
+
+
 def run_once(brain_client, ai_client, image_model: str, cache: dict) -> dict:
     """Run a single pipeline pass. Returns the (possibly updated) cache dict.
 
@@ -232,6 +323,17 @@ def run_once(brain_client, ai_client, image_model: str, cache: dict) -> dict:
         cache[name] = who
         for shot in SHOT_ORDER:
             _generate_and_upload(brain_client, ai_client, image_model, name, who, shot)
+        _generate_and_upload_glam(brain_client, name, who)
+
+    # (c) ensure every other active cached-description model has a glam shot
+    for m in active_models:
+        name = m["name"]
+        who = cache.get(name)
+        if not who:
+            continue
+        if _has_glam(name, m["files"]):
+            continue
+        _generate_and_upload_glam(brain_client, name, who)
 
     return cache
 
