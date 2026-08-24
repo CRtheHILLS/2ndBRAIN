@@ -303,6 +303,7 @@ def test_casting_page_returns_html(data_dir):
         r = c.get("/casting")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/html")
+    assert 'id="lightbox"' in r.text
 
 
 def test_startup_fails_without_brain_token(tmp_path, monkeypatch):

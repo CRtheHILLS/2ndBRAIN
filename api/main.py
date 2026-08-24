@@ -174,6 +174,7 @@ CASTING_HTML = """<!DOCTYPE html>
     aspect-ratio: 3 / 4;
     object-fit: cover;
     background: var(--border);
+    cursor: zoom-in;
   }
   figcaption {
     font-size: 0.78rem;
@@ -185,6 +186,66 @@ CASTING_HTML = """<!DOCTYPE html>
     color: var(--ink-soft);
     text-align: center;
     padding: 40px 10px;
+  }
+  #lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(20, 14, 10, 0.88);
+    padding: 24px;
+  }
+  #lightbox.is-open { display: flex; }
+  #lightbox img {
+    max-width: 95vw;
+    max-height: 95vh;
+    object-fit: contain;
+    border-radius: 8px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  }
+  .lightbox-close,
+  .lightbox-nav {
+    position: absolute;
+    background: rgba(0, 0, 0, 0.5);
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+  }
+  .lightbox-close {
+    top: max(16px, env(safe-area-inset-top));
+    right: 16px;
+    width: 44px;
+    height: 44px;
+    font-size: 1.2rem;
+  }
+  .lightbox-nav {
+    top: 50%;
+    transform: translateY(-50%);
+    width: 48px;
+    height: 48px;
+    font-size: 1.6rem;
+  }
+  .lightbox-prev { left: 12px; }
+  .lightbox-next { right: 12px; }
+  .lightbox-caption {
+    position: absolute;
+    bottom: max(16px, env(safe-area-inset-bottom));
+    left: 50%;
+    transform: translateX(-50%);
+    color: #fff;
+    background: rgba(0, 0, 0, 0.5);
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    max-width: 90vw;
+    text-align: center;
   }
 </style>
 </head>
@@ -200,6 +261,14 @@ CASTING_HTML = """<!DOCTYPE html>
   </div>
 </div>
 <div id="models"><p class="empty">불러오는 중...</p></div>
+
+<div id="lightbox" aria-hidden="true">
+  <button id="lightboxClose" class="lightbox-close" aria-label="닫기" type="button">✕</button>
+  <button id="lightboxPrev" class="lightbox-nav lightbox-prev" aria-label="이전 사진" type="button">‹</button>
+  <img id="lightboxImg" src="" alt="">
+  <button id="lightboxNext" class="lightbox-nav lightbox-next" aria-label="다음 사진" type="button">›</button>
+  <div id="lightboxCaption" class="lightbox-caption"></div>
+</div>
 
 <script>
 let currentState = { paused: false, picked: [], target: 10, active: 0 };
@@ -339,20 +408,64 @@ function renderCard(m, isFinal) {
 
   const grid = document.createElement("div");
   grid.className = "grid";
-  for (const fname of m.files) {
+  m.files.forEach((fname, idx) => {
     const fig = document.createElement("figure");
     const img = document.createElement("img");
     img.src = "/casting/img/" + encodeURIComponent(m.name) + "/" + encodeURIComponent(fname);
     img.loading = "lazy";
     img.alt = fname;
+    img.addEventListener("click", () => openLightbox(m.name, m.files, idx));
     const cap = document.createElement("figcaption");
     cap.textContent = labelFor(fname);
     fig.appendChild(img);
     fig.appendChild(cap);
     grid.appendChild(fig);
-  }
+  });
   card.appendChild(grid);
   return card;
+}
+
+let lightboxModel = "";
+let lightboxFiles = [];
+let lightboxIndex = 0;
+
+function lightboxImgUrl(name, fname) {
+  return "/casting/img/" + encodeURIComponent(name) + "/" + encodeURIComponent(fname);
+}
+
+function updateLightboxImage() {
+  const fname = lightboxFiles[lightboxIndex];
+  if (!fname) return;
+  const img = document.getElementById("lightboxImg");
+  img.src = lightboxImgUrl(lightboxModel, fname);
+  img.alt = fname;
+  document.getElementById("lightboxCaption").textContent = lightboxModel + " · " + labelFor(fname);
+}
+
+function openLightbox(name, files, index) {
+  lightboxModel = name;
+  lightboxFiles = files;
+  lightboxIndex = index;
+  updateLightboxImage();
+  const box = document.getElementById("lightbox");
+  box.classList.add("is-open");
+  box.setAttribute("aria-hidden", "false");
+}
+
+function closeLightbox() {
+  const box = document.getElementById("lightbox");
+  box.classList.remove("is-open");
+  box.setAttribute("aria-hidden", "true");
+}
+
+function isLightboxOpen() {
+  return document.getElementById("lightbox").classList.contains("is-open");
+}
+
+function lightboxStep(delta) {
+  if (!lightboxFiles.length) return;
+  lightboxIndex = (lightboxIndex + delta + lightboxFiles.length) % lightboxFiles.length;
+  updateLightboxImage();
 }
 
 function renderModels(data) {
@@ -393,6 +506,18 @@ async function loadAndRender() {
 
 document.getElementById("refresh").addEventListener("click", () => loadAndRender());
 document.getElementById("pauseToggle").addEventListener("click", () => togglePause());
+document.getElementById("lightboxClose").addEventListener("click", closeLightbox);
+document.getElementById("lightboxPrev").addEventListener("click", () => lightboxStep(-1));
+document.getElementById("lightboxNext").addEventListener("click", () => lightboxStep(1));
+document.getElementById("lightbox").addEventListener("click", (e) => {
+  if (e.target.id === "lightbox") closeLightbox();
+});
+document.addEventListener("keydown", (e) => {
+  if (!isLightboxOpen()) return;
+  if (e.key === "Escape") closeLightbox();
+  else if (e.key === "ArrowLeft") lightboxStep(-1);
+  else if (e.key === "ArrowRight") lightboxStep(1);
+});
 loadAndRender();
 </script>
 </body>
