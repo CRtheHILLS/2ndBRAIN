@@ -568,6 +568,80 @@ def search(q: str, k: int = 10):
     return index.search(q, k)
 
 
+@app.get("/debug/fs", dependencies=[Depends(require_token)])
+def debug_fs():
+    data_dir = get_settings().data_dir
+    entries = []
+
+    # Walk through depth 3 (data_dir/*, data_dir/*/*, data_dir/*/*/*)
+    if not data_dir.exists():
+        return {"path": str(data_dir), "entries": []}
+
+    try:
+        # Level 1: direct children of data_dir
+        for level1_path in data_dir.iterdir():
+            if len(entries) >= 500:
+                break
+
+            entry = {
+                "name": level1_path.name,
+                "dir": level1_path.is_dir(),
+            }
+            if level1_path.is_file():
+                try:
+                    entry["size"] = level1_path.stat().st_size
+                except (OSError, PermissionError):
+                    pass
+            entries.append(entry)
+
+            # Level 2: children of level1 directories
+            if level1_path.is_dir():
+                try:
+                    for level2_path in level1_path.iterdir():
+                        if len(entries) >= 500:
+                            break
+
+                        entry = {
+                            "name": str(level2_path.relative_to(data_dir)),
+                            "dir": level2_path.is_dir(),
+                        }
+                        if level2_path.is_file():
+                            try:
+                                entry["size"] = level2_path.stat().st_size
+                            except (OSError, PermissionError):
+                                pass
+                        entries.append(entry)
+
+                        # Level 3: children of level2 directories
+                        if level2_path.is_dir():
+                            try:
+                                for level3_path in level2_path.iterdir():
+                                    if len(entries) >= 500:
+                                        break
+
+                                    entry = {
+                                        "name": str(level3_path.relative_to(data_dir)),
+                                        "dir": level3_path.is_dir(),
+                                    }
+                                    if level3_path.is_file():
+                                        try:
+                                            entry["size"] = level3_path.stat().st_size
+                                        except (OSError, PermissionError):
+                                            pass
+                                    entries.append(entry)
+                            except (OSError, PermissionError):
+                                pass
+                except (OSError, PermissionError):
+                    pass
+    except (OSError, PermissionError):
+        pass
+
+    return {
+        "path": str(data_dir),
+        "entries": entries
+    }
+
+
 @app.get("/")
 def root():
     return RedirectResponse("/site/index.html")

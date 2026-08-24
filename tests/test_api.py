@@ -324,3 +324,34 @@ def test_startup_fails_without_brain_token(tmp_path, monkeypatch):
             asyncio.run(_enter())
     finally:
         config.get_settings.cache_clear()
+
+
+def test_debug_fs_requires_token(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        r = c.get("/debug/fs")
+    assert r.status_code == 401
+
+
+def test_debug_fs_returns_tree_with_token(data_dir):
+    from api.main import app
+    # Create some test files to ensure we have entries
+    (data_dir / "test_file.txt").write_text("content")
+    (data_dir / "subdir").mkdir(exist_ok=True)
+    (data_dir / "subdir" / "nested.txt").write_text("nested content")
+
+    with TestClient(app) as c:
+        r = c.get("/debug/fs", headers={"X-Brain-Token": "test-token"})
+    assert r.status_code == 200
+    data = r.json()
+    assert "path" in data
+    assert data["path"] == str(data_dir)
+    assert "entries" in data
+    assert len(data["entries"]) > 0
+    # Check that entries have required fields
+    for entry in data["entries"]:
+        assert "name" in entry
+        assert "dir" in entry
+        # size should only be present for files
+        if not entry["dir"]:
+            assert "size" in entry
