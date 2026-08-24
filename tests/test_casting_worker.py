@@ -1,0 +1,210 @@
+import base64
+from types import SimpleNamespace
+
+import pytest
+from sync import casting_worker as cw
+
+
+class FakeBrainClient:
+    def __init__(self, state, listing):
+        self._state = state
+        self._listing = listing
+        self.uploads = []
+
+    def get_state(self):
+        return self._state
+
+    def get_list(self):
+        return self._listing
+
+    def upload(self, model, filename, data):
+        self.uploads.append((model, filename, data))
+
+
+class FakeImages:
+    def __init__(self):
+        self.calls = []
+        self.fail_first_with = None  # optional exception to raise once
+
+    def generate(self, model, prompt, size, quality):
+        self.calls.append(prompt)
+        if self.fail_first_with is not None and len(self.calls) == 1:
+            exc = self.fail_first_with
+            self.fail_first_with = None
+            raise exc
+        payload = base64.b64encode(b"png-bytes").decode()
+        return SimpleNamespace(data=[SimpleNamespace(b64_json=payload)])
+
+
+class FakeAI:
+    def __init__(self):
+        self.images = FakeImages()
+
+
+class StatusError(Exception):
+    def __init__(self, status_code):
+        super().__init__(f"status {status_code}")
+        self.status_code = status_code
+
+
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch):
+    monkeypatch.setattr(cw, "_sleep", lambda s: None)
+
+
+def test_run_once_skips_when_paused():
+    client = FakeBrainClient({"paused": True, "picked": [], "target": 10}, {"models": [], "picked": []})
+    ai = FakeAI()
+    cache = cw.run_once(client, ai, "gpt-image-2", {})
+    assert client.uploads == []
+    assert ai.images.calls == []
+    assert cache == {}
+
+
+def test_run_once_creates_new_model_when_active_under_target(monkeypatch):
+    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 1}, {"models": [], "picked": []})
+    ai = FakeAI()
+    cache = cw.run_once(client, ai, "gpt-image-2", {})
+
+    assert len(client.uploads) == 3
+    filenames = sorted(f for (_, f, _) in client.uploads)
+    assert filenames == ["back.png", "face.png", "torso.png"]
+    names = {name for (name, _, _) in client.uploads}
+    assert len(names) == 1
+    name = names.pop()
+    assert name.startswith("Claire ")
+    assert cache[name] == cw.CONCEPTS[0]
+    for (_, _, data) in client.uploads:
+        assert data == b"png-bytes"
+
+
+def test_run_once_fills_missing_shot_using_cached_description():
+    client = FakeBrainClient(
+        {"paused": False, "picked": [], "target": 1},
+        {"models": [{"name": "Claire Larsen", "files": ["face.png", "torso.png"]}], "picked": []},
+    )
+    ai = FakeAI()
+    cache = {"Claire Larsen": cw.CONCEPTS[4]}
+    cw.run_once(client, ai, "gpt-image-2", cache)
+    assert client.uploads == [("Claire Larsen", "back.png", b"png-bytes")]
+
+
+def test_run_once_skips_fill_when_no_cached_description():
+    client = FakeBrainClient(
+        {"paused": False, "picked": [], "target": 1},
+        {"models": [{"name": "Uploaded Manually", "files": ["face.png"]}], "picked": []},
+    )
+    ai = FakeAI()
+    cw.run_once(client, ai, "gpt-image-2", {})
+    assert client.uploads == []
+
+
+def test_run_once_ignores_picked_models_for_target_math():
+    client = FakeBrainClient(
+        {"paused": False, "picked": ["Claire Kim"], "target": 1},
+        {"models": [], "picked": [{"name": "Claire Kim", "files": ["face.png", "torso.png", "back.png"]}]},
+    )
+    ai = FakeAI()
+    cache = {}
+    cw.run_once(client, ai, "gpt-image-2", cache)
+    # active (non-picked) count is 0 < target 1, so a new model must be created
+    assert len(client.uploads) == 3
+    names = {name for (name, _, _) in client.uploads}
+    assert "Claire Kim" not in names
+
+
+def test_brain_client_upload_sends_token_header(monkeypatch):
+    captured = {}
+
+    def fake_post(url, headers=None, data=None, files=None, timeout=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["data"] = data
+        captured["files"] = files
+
+        class R:
+            def raise_for_status(self):
+                pass
+
+        return R()
+
+    monkeypatch.setattr(cw.httpx, "post", fake_post)
+    client = cw.BrainClient("http://x/", "tok123")
+    client.upload("Claire Larsen", "face.png", b"bytes")
+
+    assert captured["url"] == "http://x/casting/upload"
+    assert captured["headers"]["X-Brain-Token"] == "tok123"
+    assert captured["data"] == {"model": "Claire Larsen"}
+    assert captured["files"]["file"][0] == "face.png"
+
+
+def test_build_prompt_face_matches_spec():
+    prompt = cw.build_prompt("a test woman", "face")
+    assert prompt == (
+        "Photorealistic professional model photography, Vogue editorial level. "
+        "Subject: a test woman, 173cm, slender long-legged model proportions. "
+        "Extreme close-up beauty portrait, face filling the frame, flawless "
+        "natural skin texture, soft studio light, direct eye contact, gentle "
+        "confident expression. Fully clothed, tasteful."
+    )
+
+
+def test_build_prompt_torso_soft_swaps_dress_phrase():
+    hard = cw.build_prompt("a test woman", "torso", soft=False)
+    soft = cw.build_prompt("a test woman", "torso", soft=True)
+    assert "elegant black satin evening dress" in hard
+    assert "elegant black satin evening dress" not in soft
+    assert "elegant evening dress" in soft
+
+
+def test_build_prompt_back_soft_swaps_gown_phrase():
+    hard = cw.build_prompt("a test woman", "back", soft=False)
+    soft = cw.build_prompt("a test woman", "back", soft=True)
+    assert "figure-hugging satin evening gown" in hard
+    assert "figure-hugging satin evening gown" not in soft
+    assert "elegant evening gown, back view, glancing over her shoulder" in soft
+
+
+def test_generate_shot_retries_with_soft_prompt_on_400():
+    ai = FakeAI()
+    ai.images.fail_first_with = StatusError(400)
+    data = cw.generate_shot(ai, "a test woman", "torso", "gpt-image-2")
+    assert data == b"png-bytes"
+    assert len(ai.images.calls) == 2
+    assert "elegant black satin evening dress" in ai.images.calls[0]
+    assert "elegant evening dress" in ai.images.calls[1]
+
+
+def test_generate_shot_retries_after_sleep_on_429(monkeypatch):
+    slept = []
+    monkeypatch.setattr(cw, "_sleep", lambda s: slept.append(s))
+    ai = FakeAI()
+    ai.images.fail_first_with = StatusError(429)
+    data = cw.generate_shot(ai, "a test woman", "face", "gpt-image-2")
+    assert data == b"png-bytes"
+    assert len(ai.images.calls) == 2
+    assert slept == [20]
+
+
+def test_generate_shot_reraises_other_errors():
+    ai = FakeAI()
+    ai.images.fail_first_with = StatusError(500)
+    with pytest.raises(StatusError):
+        cw.generate_shot(ai, "a test woman", "face", "gpt-image-2")
+
+
+def test_new_model_name_avoids_existing_names(monkeypatch):
+    existing = {f"Claire {s}" for s in cw.SURNAME_POOL[:-1]}
+    name = cw._new_model_name(existing)
+    assert name == f"Claire {cw.SURNAME_POOL[-1]}"
+
+
+def test_concept_rotation_cycles_through_all_concepts():
+    cache = {}
+    seen = [cw._next_concept(cache) for _ in range(len(cw.CONCEPTS))]
+    assert seen == cw.CONCEPTS
+    # wraps back around
+    assert cw._next_concept(cache) == cw.CONCEPTS[0]
+    # the rotation counter must never be treated as a cached model description
+    assert "_concept_idx" in cache

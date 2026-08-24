@@ -1,3 +1,4 @@
+import json
 import re
 import shutil
 from contextlib import asynccontextmanager
@@ -6,6 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse, PlainTextResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from brain import store, ingest, distill, render, index, levels
 from brain.config import get_settings
 from brain.ingest import _sanitize_filename
@@ -44,20 +46,42 @@ CASTING_HTML = """<!DOCTYPE html>
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    padding: 16px 16px 96px;
+    padding: 0 16px 32px;
     background: var(--paper);
     color: var(--ink);
     font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", -apple-system, sans-serif;
     line-height: 1.5;
   }
+  #topbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    margin: 0 -16px 16px;
+    padding: 12px 16px calc(10px + env(safe-area-inset-top));
+    background: var(--paper);
+    border-bottom: 1px solid var(--border);
+  }
   h1 {
     font-size: 1.4rem;
-    margin: 8px 0 16px;
+    margin: 0 0 10px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
   }
+  .topbar-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .topbar-buttons { display: flex; gap: 8px; }
+  #finalInfo {
+    font-size: 0.9rem;
+    color: var(--ink-soft);
+  }
+  #finalInfo strong { color: var(--rose-dark); }
   button {
     font: inherit;
     cursor: pointer;
@@ -72,12 +96,40 @@ CASTING_HTML = """<!DOCTYPE html>
     border: 1px solid var(--border);
   }
   .refresh-btn:active { transform: scale(0.97); }
+  .pause-btn {
+    background: var(--card);
+    color: var(--ink);
+    border: 1px solid var(--rose);
+  }
+  .pause-btn.is-paused {
+    background: var(--rose);
+    color: #fff;
+    border-color: var(--rose);
+  }
+  .pause-btn:active { transform: scale(0.97); }
+  .pick-btn {
+    background: var(--rose);
+    color: #fff;
+    border: 1px solid var(--rose);
+  }
+  .pick-btn:active { transform: scale(0.97); }
+  .unpick-btn {
+    background: transparent;
+    color: var(--ink-soft);
+    border: 1px solid var(--border);
+  }
+  .unpick-btn:active { transform: scale(0.97); }
   .delete-btn {
     background: transparent;
     color: var(--rose-dark);
     border: 1px solid var(--rose);
   }
   .delete-btn:active { transform: scale(0.97); }
+  .section-title {
+    font-size: 1.05rem;
+    margin: 4px 0 10px;
+    color: var(--rose-dark);
+  }
   .card {
     background: var(--card);
     border: 1px solid var(--border);
@@ -86,6 +138,7 @@ CASTING_HTML = """<!DOCTYPE html>
     padding: 14px;
     margin-bottom: 16px;
   }
+  .card.is-final { border-color: var(--rose); }
   .card-head {
     display: flex;
     align-items: center;
@@ -98,14 +151,11 @@ CASTING_HTML = """<!DOCTYPE html>
     font-size: 1.1rem;
     margin: 0;
   }
-  .pick {
+  .card-actions {
     display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.9rem;
-    color: var(--ink-soft);
+    gap: 8px;
+    flex-wrap: wrap;
   }
-  .pick input { width: 18px; height: 18px; accent-color: var(--rose); }
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
@@ -136,26 +186,23 @@ CASTING_HTML = """<!DOCTYPE html>
     text-align: center;
     padding: 40px 10px;
   }
-  #bar {
-    position: fixed;
-    left: 0; right: 0; bottom: 0;
-    background: var(--card);
-    border-top: 1px solid var(--border);
-    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
-    box-shadow: 0 -2px 10px rgba(0,0,0,0.06);
-    font-size: 0.95rem;
-    text-align: center;
-  }
-  #bar strong { color: var(--rose-dark); }
 </style>
 </head>
 <body>
-<h1>📸 캐스팅 갤러리 <button class="refresh-btn" id="refresh">🔄 새로고침</button></h1>
+<div id="topbar">
+  <h1>📸 캐스팅 갤러리</h1>
+  <div class="topbar-controls">
+    <div class="topbar-buttons">
+      <button class="pause-btn" id="pauseToggle">⏸️ 생성 멈춤</button>
+      <button class="refresh-btn" id="refresh">🔄</button>
+    </div>
+    <div id="finalInfo">💖 최종 라운드: <strong id="finalCount">0</strong>명</div>
+  </div>
+</div>
 <div id="models"><p class="empty">불러오는 중...</p></div>
-<div id="bar">현재 선택: <strong id="picked">아직 없음</strong></div>
 
 <script>
-const STORAGE_KEY = "clairCastingPick";
+let currentState = { paused: false, picked: [], target: 10, active: 0 };
 
 function labelFor(fname) {
   const stem = fname.replace(/\\.[^.]+$/, "").toLowerCase();
@@ -174,14 +221,67 @@ function getToken() {
   return t;
 }
 
-function updateBar() {
-  const picked = localStorage.getItem(STORAGE_KEY);
-  document.getElementById("picked").textContent = picked || "아직 없음";
+async function checkAuth(res) {
+  if (res.status === 401) {
+    localStorage.removeItem("brainToken");
+    alert("토큰이 올바르지 않아요. 다시 시도해주세요.");
+    return false;
+  }
+  return true;
 }
 
-function pickModel(name) {
-  localStorage.setItem(STORAGE_KEY, name);
-  updateBar();
+function renderTopbar() {
+  const btn = document.getElementById("pauseToggle");
+  btn.textContent = currentState.paused ? "▶️ 재개" : "⏸️ 생성 멈춤";
+  btn.classList.toggle("is-paused", !!currentState.paused);
+  document.getElementById("finalCount").textContent = (currentState.picked || []).length;
+}
+
+async function togglePause() {
+  const token = getToken();
+  if (!token) return;
+  const res = await fetch("/casting/state", {
+    method: "POST",
+    headers: { "X-Brain-Token": token, "Content-Type": "application/json" },
+    body: JSON.stringify({ paused: !currentState.paused })
+  });
+  if (!(await checkAuth(res))) return;
+  if (!res.ok) {
+    alert("업데이트에 실패했어요.");
+    return;
+  }
+  currentState = await res.json();
+  renderTopbar();
+}
+
+async function pickModel(name) {
+  const token = getToken();
+  if (!token) return;
+  const res = await fetch("/casting/pick/" + encodeURIComponent(name), {
+    method: "POST",
+    headers: { "X-Brain-Token": token }
+  });
+  if (!(await checkAuth(res))) return;
+  if (!res.ok) {
+    alert("픽에 실패했어요.");
+    return;
+  }
+  await loadAndRender();
+}
+
+async function unpickModel(name) {
+  const token = getToken();
+  if (!token) return;
+  const res = await fetch("/casting/unpick/" + encodeURIComponent(name), {
+    method: "POST",
+    headers: { "X-Brain-Token": token }
+  });
+  if (!(await checkAuth(res))) return;
+  if (!res.ok) {
+    alert("되돌리기에 실패했어요.");
+    return;
+  }
+  await loadAndRender();
 }
 
 async function deleteModel(name) {
@@ -192,88 +292,107 @@ async function deleteModel(name) {
     method: "DELETE",
     headers: { "X-Brain-Token": token }
   });
-  if (res.status === 401) {
-    localStorage.removeItem("brainToken");
-    alert("토큰이 올바르지 않아요. 다시 시도해주세요.");
-    return;
-  }
+  if (!(await checkAuth(res))) return;
   if (!res.ok) {
     alert("삭제에 실패했어요.");
     return;
   }
-  if (localStorage.getItem(STORAGE_KEY) === name) {
-    localStorage.removeItem(STORAGE_KEY);
-  }
   await loadAndRender();
 }
 
-function renderModels(models) {
+function renderCard(m, isFinal) {
+  const card = document.createElement("div");
+  card.className = isFinal ? "card is-final" : "card";
+
+  const head = document.createElement("div");
+  head.className = "card-head";
+
+  const h2 = document.createElement("h2");
+  h2.textContent = m.name;
+  head.appendChild(h2);
+
+  const actions = document.createElement("div");
+  actions.className = "card-actions";
+
+  if (isFinal) {
+    const backBtn = document.createElement("button");
+    backBtn.className = "unpick-btn";
+    backBtn.textContent = "↩️ 되돌리기";
+    backBtn.addEventListener("click", () => unpickModel(m.name));
+    actions.appendChild(backBtn);
+  } else {
+    const pickBtn = document.createElement("button");
+    pickBtn.className = "pick-btn";
+    pickBtn.textContent = "💖 PICK";
+    pickBtn.addEventListener("click", () => pickModel(m.name));
+    actions.appendChild(pickBtn);
+  }
+
+  const delBtn = document.createElement("button");
+  delBtn.className = "delete-btn";
+  delBtn.textContent = "💔 삭제";
+  delBtn.addEventListener("click", () => deleteModel(m.name));
+  actions.appendChild(delBtn);
+
+  head.appendChild(actions);
+  card.appendChild(head);
+
+  const grid = document.createElement("div");
+  grid.className = "grid";
+  for (const fname of m.files) {
+    const fig = document.createElement("figure");
+    const img = document.createElement("img");
+    img.src = "/casting/img/" + encodeURIComponent(m.name) + "/" + encodeURIComponent(fname);
+    img.loading = "lazy";
+    img.alt = fname;
+    const cap = document.createElement("figcaption");
+    cap.textContent = labelFor(fname);
+    fig.appendChild(img);
+    fig.appendChild(cap);
+    grid.appendChild(fig);
+  }
+  card.appendChild(grid);
+  return card;
+}
+
+function renderModels(data) {
   const root = document.getElementById("models");
   root.innerHTML = "";
-  if (!models.length) {
+  const picked = data.picked || [];
+  const models = data.models || [];
+
+  if (picked.length) {
+    const section = document.createElement("div");
+    section.className = "section";
+    const h2 = document.createElement("h2");
+    h2.className = "section-title";
+    h2.textContent = "💖 최종 라운드";
+    section.appendChild(h2);
+    for (const m of picked) section.appendChild(renderCard(m, true));
+    root.appendChild(section);
+  }
+
+  if (!models.length && !picked.length) {
     root.innerHTML = '<p class="empty">아직 업로드된 후보가 없어요.</p>';
     return;
   }
-  const picked = localStorage.getItem(STORAGE_KEY);
-  for (const m of models) {
-    const card = document.createElement("div");
-    card.className = "card";
 
-    const head = document.createElement("div");
-    head.className = "card-head";
-
-    const h2 = document.createElement("h2");
-    h2.textContent = m.name;
-
-    const pickWrap = document.createElement("label");
-    pickWrap.className = "pick";
-    const radio = document.createElement("input");
-    radio.type = "radio";
-    radio.name = "claire-pick";
-    radio.value = m.name;
-    radio.checked = picked === m.name;
-    radio.addEventListener("change", () => pickModel(m.name));
-    pickWrap.appendChild(radio);
-    pickWrap.appendChild(document.createTextNode("이 사람이 클레어"));
-
-    const delBtn = document.createElement("button");
-    delBtn.className = "delete-btn";
-    delBtn.textContent = "💔 삭제";
-    delBtn.addEventListener("click", () => deleteModel(m.name));
-
-    head.appendChild(h2);
-    head.appendChild(pickWrap);
-    head.appendChild(delBtn);
-    card.appendChild(head);
-
-    const grid = document.createElement("div");
-    grid.className = "grid";
-    for (const fname of m.files) {
-      const fig = document.createElement("figure");
-      const img = document.createElement("img");
-      img.src = "/casting/img/" + encodeURIComponent(m.name) + "/" + encodeURIComponent(fname);
-      img.loading = "lazy";
-      img.alt = fname;
-      const cap = document.createElement("figcaption");
-      cap.textContent = labelFor(fname);
-      fig.appendChild(img);
-      fig.appendChild(cap);
-      grid.appendChild(fig);
-    }
-    card.appendChild(grid);
-    root.appendChild(card);
-  }
+  for (const m of models) root.appendChild(renderCard(m, false));
 }
 
 async function loadAndRender() {
-  const res = await fetch("/casting/list");
-  const data = await res.json();
-  renderModels(data.models || []);
-  updateBar();
+  const [stateRes, listRes] = await Promise.all([
+    fetch("/casting/state"),
+    fetch("/casting/list")
+  ]);
+  currentState = await stateRes.json();
+  const data = await listRes.json();
+  renderTopbar();
+  renderModels(data);
 }
 
 document.getElementById("refresh").addEventListener("click", () => loadAndRender());
-updateBar();
+document.getElementById("pauseToggle").addEventListener("click", () => togglePause());
 loadAndRender();
 </script>
 </body>
@@ -382,6 +501,44 @@ def _safe_segment(s: str) -> bool:
     return bool(s) and ".." not in s and "/" not in s and "\\" not in s
 
 
+def _is_model_dir(p: Path) -> bool:
+    """A model candidate directory: any dir not starting with '_' (the
+    leading underscore is reserved for internal files like _state.json)."""
+    return p.is_dir() and not p.name.startswith("_")
+
+
+def _casting_state_path() -> Path:
+    return _casting_root() / "_state.json"
+
+
+def _default_casting_state() -> dict:
+    return {"paused": False, "picked": [], "target": 10}
+
+
+def _load_casting_state() -> dict:
+    p = _casting_state_path()
+    state = _default_casting_state()
+    if not p.is_file():
+        return state
+    try:
+        data = json.loads(p.read_text("utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return state
+    if isinstance(data, dict):
+        state.update({k: v for k, v in data.items() if k in state})
+    return state
+
+
+def _save_casting_state(state: dict) -> None:
+    root = _casting_root()
+    root.mkdir(parents=True, exist_ok=True)
+    _casting_state_path().write_text(json.dumps(state, ensure_ascii=False, indent=1), "utf-8")
+
+
+class CastingStateUpdate(BaseModel):
+    paused: bool
+
+
 @app.post("/casting/upload", dependencies=[Depends(require_token)])
 async def casting_upload(model: str = Form(...), file: UploadFile = File(...)):
     name = _sanitize_model(model)
@@ -396,16 +553,61 @@ async def casting_upload(model: str = Form(...), file: UploadFile = File(...)):
     return {"model": name, "file": filename}
 
 
+@app.get("/casting/state")
+def casting_state():
+    state = _load_casting_state()
+    picked_set = set(state["picked"])
+    root = _casting_root()
+    active = 0
+    if root.exists():
+        active = sum(1 for p in root.iterdir() if _is_model_dir(p) and p.name not in picked_set)
+    return {**state, "active": active}
+
+
+@app.post("/casting/state", dependencies=[Depends(require_token)])
+def casting_state_update(body: CastingStateUpdate):
+    state = _load_casting_state()
+    state["paused"] = body.paused
+    _save_casting_state(state)
+    return state
+
+
+@app.post("/casting/pick/{model}", dependencies=[Depends(require_token)])
+def casting_pick(model: str):
+    if not _safe_segment(model):
+        raise HTTPException(404)
+    if not (_casting_root() / model).is_dir():
+        raise HTTPException(404)
+    state = _load_casting_state()
+    if model not in state["picked"]:
+        state["picked"].append(model)
+        _save_casting_state(state)
+    return state
+
+
+@app.post("/casting/unpick/{model}", dependencies=[Depends(require_token)])
+def casting_unpick(model: str):
+    if not _safe_segment(model):
+        raise HTTPException(404)
+    state = _load_casting_state()
+    if model in state["picked"]:
+        state["picked"].remove(model)
+        _save_casting_state(state)
+    return state
+
+
 @app.get("/casting/list")
 def casting_list():
     root = _casting_root()
-    if not root.exists():
-        return {"models": []}
-    models = []
-    for d in sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p: p.name):
-        files = sorted(p.name for p in d.iterdir() if p.is_file())
-        models.append({"name": d.name, "files": files})
-    return {"models": models}
+    state = _load_casting_state()
+    picked_set = set(state["picked"])
+    models, picked = [], []
+    if root.exists():
+        for d in sorted((p for p in root.iterdir() if _is_model_dir(p)), key=lambda p: p.name):
+            files = sorted(p.name for p in d.iterdir() if p.is_file())
+            item = {"name": d.name, "files": files}
+            (picked if d.name in picked_set else models).append(item)
+    return {"models": models, "picked": picked}
 
 
 @app.get("/casting/img/{model}/{fname}")
@@ -437,6 +639,10 @@ def casting_delete_model(model: str):
     if not d.is_dir():
         raise HTTPException(404)
     shutil.rmtree(d)
+    state = _load_casting_state()
+    if model in state["picked"]:
+        state["picked"].remove(model)
+        _save_casting_state(state)
     return {"deleted": model}
 
 
