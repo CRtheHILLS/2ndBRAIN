@@ -1,6 +1,7 @@
 # NEXT.md — 2nd BRAIN (Clair)
 
 ## 내일(2026-08-25~) 제일 먼저 — 캐스팅 1차 진행 중
+- [x] 2026-08-25 볼륨 버그(DATA_DIR 경로 변환) 수정 + 전체 복구 완료; 워커 v2(참조 체인, 10명 고정) 가동
 - [ ] 캐스팅 센터: https://2ndbrain-production-4ab7.up.railway.app/casting — CR이 후보 삭제/PICK 진행. 삭제로 10명 미만이 되면 로컬 워커가 자동 충원 (**워커는 PC 재부팅 시 다시 켜야 함**: `XAI_API_KEY=<.env값> .venv/Scripts/python -m sync.casting_worker --url <BRAIN_URL> --token <BRAIN_TOKEN> --interval 90`)
 - [ ] 모델 확정되면: 새 MASTER 3컷 세팅 → CLAIR_SPEC/CHANGELOG/메모리 갱신 → 양자·생명 수업 페이지 사진 5컷 재생성 후 재발행+볼륨 보관
 - [ ] 2명 확정 시: 두 번째 동반자 페르소나/역할 설계 (메모리 clair-image-consistency 참조)
