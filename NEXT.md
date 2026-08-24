@@ -1,5 +1,11 @@
 # NEXT.md — 2nd BRAIN (Clair)
 
+## 내일(2026-08-25~) 제일 먼저 — 캐스팅 1차 진행 중
+- [ ] 캐스팅 센터: https://2ndbrain-production-4ab7.up.railway.app/casting — CR이 후보 삭제/PICK 진행. 삭제로 10명 미만이 되면 로컬 워커가 자동 충원 (**워커는 PC 재부팅 시 다시 켜야 함**: `XAI_API_KEY=<.env값> .venv/Scripts/python -m sync.casting_worker --url <BRAIN_URL> --token <BRAIN_TOKEN> --interval 90`)
+- [ ] 모델 확정되면: 새 MASTER 3컷 세팅 → CLAIR_SPEC/CHANGELOG/메모리 갱신 → 양자·생명 수업 페이지 사진 5컷 재생성 후 재발행+볼륨 보관
+- [ ] 2명 확정 시: 두 번째 동반자 페르소나/역할 설계 (메모리 clair-image-consistency 참조)
+- [ ] 키 재발급 권장: XAI 키가 채팅에 노출됨
+
 Phase: **0 complete → Phase 1 starting**. Live: https://2ndbrain-production-4ab7.up.railway.app (volume /data 5GB). Branch main @ bc9c12e.
 - Spec: docs/superpowers/specs/2026-08-22-2ndbrain-design.md
 - Phase 0 plan (done): docs/superpowers/plans/2026-08-22-phase0-foundation.md
