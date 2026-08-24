@@ -281,24 +281,6 @@ function labelFor(fname) {
   return fname;
 }
 
-function getToken() {
-  let t = localStorage.getItem("brainToken");
-  if (!t) {
-    t = prompt("토큰을 입력하세요");
-    if (t) localStorage.setItem("brainToken", t);
-  }
-  return t;
-}
-
-async function checkAuth(res) {
-  if (res.status === 401) {
-    localStorage.removeItem("brainToken");
-    alert("토큰이 올바르지 않아요. 다시 시도해주세요.");
-    return false;
-  }
-  return true;
-}
-
 function renderTopbar() {
   const btn = document.getElementById("pauseToggle");
   btn.textContent = currentState.paused ? "▶️ 재개" : "⏸️ 생성 멈춤";
@@ -307,14 +289,11 @@ function renderTopbar() {
 }
 
 async function togglePause() {
-  const token = getToken();
-  if (!token) return;
   const res = await fetch("/casting/state", {
     method: "POST",
-    headers: { "X-Brain-Token": token, "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ paused: !currentState.paused })
   });
-  if (!(await checkAuth(res))) return;
   if (!res.ok) {
     alert("업데이트에 실패했어요.");
     return;
@@ -324,13 +303,9 @@ async function togglePause() {
 }
 
 async function pickModel(name) {
-  const token = getToken();
-  if (!token) return;
   const res = await fetch("/casting/pick/" + encodeURIComponent(name), {
-    method: "POST",
-    headers: { "X-Brain-Token": token }
+    method: "POST"
   });
-  if (!(await checkAuth(res))) return;
   if (!res.ok) {
     alert("픽에 실패했어요.");
     return;
@@ -339,13 +314,9 @@ async function pickModel(name) {
 }
 
 async function unpickModel(name) {
-  const token = getToken();
-  if (!token) return;
   const res = await fetch("/casting/unpick/" + encodeURIComponent(name), {
-    method: "POST",
-    headers: { "X-Brain-Token": token }
+    method: "POST"
   });
-  if (!(await checkAuth(res))) return;
   if (!res.ok) {
     alert("되돌리기에 실패했어요.");
     return;
@@ -355,16 +326,13 @@ async function unpickModel(name) {
 
 async function deleteModel(name) {
   if (!confirm(name + " 폴더 전체를 삭제할까요?")) return;
-  const token = getToken();
-  if (!token) return;
+  const card = document.querySelector('[data-model="' + CSS.escape(name) + '"]');
+  if (card) card.remove();
   const res = await fetch("/casting/" + encodeURIComponent(name), {
-    method: "DELETE",
-    headers: { "X-Brain-Token": token }
+    method: "DELETE"
   });
-  if (!(await checkAuth(res))) return;
   if (!res.ok) {
     alert("삭제에 실패했어요.");
-    return;
   }
   await loadAndRender();
 }
@@ -372,6 +340,7 @@ async function deleteModel(name) {
 function renderCard(m, isFinal) {
   const card = document.createElement("div");
   card.className = isFinal ? "card is-final" : "card";
+  card.dataset.model = m.name;
 
   const head = document.createElement("div");
   head.className = "card-head";
@@ -689,7 +658,7 @@ def casting_state():
     return {**state, "active": active}
 
 
-@app.post("/casting/state", dependencies=[Depends(require_token)])
+@app.post("/casting/state")
 def casting_state_update(body: CastingStateUpdate):
     state = _load_casting_state()
     state["paused"] = body.paused
@@ -697,7 +666,7 @@ def casting_state_update(body: CastingStateUpdate):
     return state
 
 
-@app.post("/casting/pick/{model}", dependencies=[Depends(require_token)])
+@app.post("/casting/pick/{model}")
 def casting_pick(model: str):
     if not _safe_segment(model):
         raise HTTPException(404)
@@ -710,7 +679,7 @@ def casting_pick(model: str):
     return state
 
 
-@app.post("/casting/unpick/{model}", dependencies=[Depends(require_token)])
+@app.post("/casting/unpick/{model}")
 def casting_unpick(model: str):
     if not _safe_segment(model):
         raise HTTPException(404)
@@ -745,7 +714,7 @@ def casting_img(model: str, fname: str):
     return FileResponse(p, headers={"cache-control": "no-store"})
 
 
-@app.delete("/casting/{model}/{fname}", dependencies=[Depends(require_token)])
+@app.delete("/casting/{model}/{fname}")
 def casting_delete_file(model: str, fname: str):
     if not _safe_segment(model) or not _safe_segment(fname):
         raise HTTPException(404)
@@ -756,7 +725,7 @@ def casting_delete_file(model: str, fname: str):
     return {"deleted": fname}
 
 
-@app.delete("/casting/{model}", dependencies=[Depends(require_token)])
+@app.delete("/casting/{model}")
 def casting_delete_model(model: str):
     if not _safe_segment(model):
         raise HTTPException(404)

@@ -171,13 +171,13 @@ def test_casting_img_path_traversal_returns_404(data_dir):
         assert r.status_code in (400, 404)
 
 
-def test_casting_delete_requires_token(data_dir):
+def test_casting_delete_works_without_token(data_dir):
     from api.main import app
     with TestClient(app) as c:
         c.post("/casting/upload", headers={"X-Brain-Token": "test-token"},
                data={"model": "Alice"}, files={"file": ("face1.jpg", b"imgbytes")})
         r = c.delete("/casting/Alice")
-    assert r.status_code == 401
+    assert r.status_code == 200
 
 
 def test_casting_delete_model_removes_it(data_dir):
@@ -206,11 +206,11 @@ def test_casting_state_requires_no_token_for_get(data_dir):
     assert r.status_code == 200
 
 
-def test_casting_state_update_requires_token(data_dir):
+def test_casting_state_update_works_without_token(data_dir):
     from api.main import app
     with TestClient(app) as c:
         r = c.post("/casting/state", json={"paused": True})
-    assert r.status_code == 401
+    assert r.status_code == 200
 
 
 def test_casting_state_update_persists_and_returns_state(data_dir):
@@ -225,13 +225,13 @@ def test_casting_state_update_persists_and_returns_state(data_dir):
         assert r.json()["paused"] is True
 
 
-def test_casting_pick_requires_token(data_dir):
+def test_casting_pick_works_without_token(data_dir):
     from api.main import app
     with TestClient(app) as c:
         c.post("/casting/upload", headers={"X-Brain-Token": "test-token"},
                data={"model": "Alice"}, files={"file": ("face1.jpg", b"x")})
         r = c.post("/casting/pick/Alice")
-    assert r.status_code == 401
+    assert r.status_code == 200
 
 
 def test_casting_pick_404_when_model_missing(data_dir):
