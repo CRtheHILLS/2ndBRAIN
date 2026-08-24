@@ -123,6 +123,82 @@ def test_process_returns_502_on_unparseable_llm_response(data_dir, monkeypatch):
     assert r.status_code == 502
 
 
+def test_casting_upload_requires_token(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        r = c.post("/casting/upload", data={"model": "Alice"},
+                   files={"file": ("face1.jpg", b"imgbytes")})
+    assert r.status_code == 401
+
+
+def test_casting_upload_list_img_roundtrip(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        r = c.post("/casting/upload", headers={"X-Brain-Token": "test-token"},
+                   data={"model": "Alice"},
+                   files={"file": ("face1.jpg", b"imgbytes")})
+        assert r.status_code == 200
+        assert r.json() == {"model": "Alice", "file": "face1.jpg"}
+
+        r = c.get("/casting/list")
+        assert r.status_code == 200
+        assert r.json() == {"models": [{"name": "Alice", "files": ["face1.jpg"]}]}
+
+        r = c.get("/casting/img/Alice/face1.jpg")
+        assert r.status_code == 200
+        assert r.content == b"imgbytes"
+        assert r.headers["cache-control"] == "no-store"
+
+
+def test_casting_list_empty(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        r = c.get("/casting/list")
+    assert r.status_code == 200
+    assert r.json() == {"models": []}
+
+
+def test_casting_img_path_traversal_returns_404(data_dir):
+    # httpx normalizes literal ".." path segments before sending, so use
+    # percent-encoded dots to exercise the server-side sanitization itself.
+    from api.main import app
+    with TestClient(app) as c:
+        c.post("/casting/upload", headers={"X-Brain-Token": "test-token"},
+               data={"model": "Alice"}, files={"file": ("face1.jpg", b"imgbytes")})
+        r = c.get("/casting/img/Alice/%2e%2e")
+        assert r.status_code in (400, 404)
+        r = c.get("/casting/img/%2e%2e/face1.jpg")
+        assert r.status_code in (400, 404)
+
+
+def test_casting_delete_requires_token(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        c.post("/casting/upload", headers={"X-Brain-Token": "test-token"},
+               data={"model": "Alice"}, files={"file": ("face1.jpg", b"imgbytes")})
+        r = c.delete("/casting/Alice")
+    assert r.status_code == 401
+
+
+def test_casting_delete_model_removes_it(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        c.post("/casting/upload", headers={"X-Brain-Token": "test-token"},
+               data={"model": "Alice"}, files={"file": ("face1.jpg", b"imgbytes")})
+        r = c.delete("/casting/Alice", headers={"X-Brain-Token": "test-token"})
+        assert r.status_code == 200
+        r = c.get("/casting/list")
+        assert r.json() == {"models": []}
+
+
+def test_casting_page_returns_html(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        r = c.get("/casting")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+
+
 def test_startup_fails_without_brain_token(tmp_path, monkeypatch):
     import asyncio
     from brain import config
