@@ -15,6 +15,13 @@ Contract (v2):
   frame. Without XAI_API_KEY both edits go to OpenAI.
 * Every PNG is uploaded to the server (POST /casting/upload) immediately after
   it is generated, as `<Model_With_Underscores>_<shot>.png`.
+* `--silhouette-ref PATH` (default `~/Desktop/2ndBRAIN/Clair/refs/
+  BACK_SILHOUETTE_REF_Petrova.png`) is an optional back-view pose/silhouette
+  reference. When the file exists it rides along on every "back" edit shot
+  only (face/torso untouched): OpenAI gets it as a second reference image
+  with a prefix explaining which image is which, Grok gets the same
+  description folded into the prompt as words (its edit endpoint takes one
+  image). Missing file -> behaves exactly as before.
 
 State that the server cannot hold (which concept text a model was born from,
 and which names have already been burned) lives in ~/.brain-casting.json:
@@ -38,6 +45,12 @@ HISTORY = Path.home() / ".brain-casting.json"
 # Every generated face is kept here so a later run can finish a model whose
 # torso/back never made it up (the reference chain needs the original face).
 FACE_DIR = Path.home() / ".brain-casting"
+# Optional back-view silhouette reference (pose/body-shape only, not a face).
+# When present it rides along on every "back" edit shot; when missing the
+# worker behaves exactly as before.
+DEFAULT_SILHOUETTE_REF = (
+    Path.home() / "Desktop" / "2ndBRAIN" / "Clair" / "refs" / "BACK_SILHOUETTE_REF_Petrova.png"
+)
 
 TARGET_DEFAULT = 10
 SHOT_ORDER = ("face", "torso", "back")
@@ -61,6 +74,21 @@ BASE_SOFT = (
 REFERENCE_PREFIX = (
     "Same woman as the reference image — identical face, hair, skin and body. "
 )
+
+# Back-view silhouette reference: description shared verbatim between the
+# OpenAI two-image prefix and the Grok in-words sentence.
+SILHOUETTE_DESC = (
+    "the body silhouette and pose style to reproduce (figure-hugging gown, "
+    "pronounced feminine hip curve, elegant back-arch, glancing over the "
+    "shoulder)"
+)
+
+SILHOUETTE_PREFIX = (
+    "First reference image = the woman (keep her face, hair, skin identical). "
+    f"Second reference image = {SILHOUETTE_DESC}. "
+)
+
+SILHOUETTE_GROK_SENTENCE = f"Reproduce {SILHOUETTE_DESC}."
 
 FACE_SHOT = (
     "Extreme close-up beauty portrait, face filling the frame, flawless "
@@ -485,20 +513,38 @@ def generate_face(ai_client, image_model: str, who: str) -> bytes:
     )
 
 
-def edit_with_openai(ai_client, image_model: str, face: bytes, who: str, shot: str, rng) -> bytes:
-    """Shots 2/3 via OpenAI, using the face image as the reference."""
-    return _guarded(
-        lambda soft: build_edit_prompt(who, openai_shot_text(rng, shot, soft), soft),
-        lambda prompt: _decode_image(
+def edit_with_openai(ai_client, image_model: str, face: bytes, who: str, shot: str, rng,
+                     silhouette: bytes = None) -> bytes:
+    """Shots 2/3 via OpenAI, using the face image as the reference.
+
+    Back shots additionally take the back-silhouette reference (when
+    configured) as a second reference image, with a prefix explaining which
+    image is which. Torso/face are unaffected even when a silhouette ref is
+    configured.
+    """
+    use_silhouette = shot == "back" and silhouette is not None
+
+    def make_prompt(soft):
+        prompt = build_edit_prompt(who, openai_shot_text(rng, shot, soft), soft)
+        return SILHOUETTE_PREFIX + prompt if use_silhouette else prompt
+
+    def invoke(prompt):
+        image = (
+            [_as_upload(face, "face.png"), _as_upload(silhouette, "silhouette.png")]
+            if use_silhouette
+            else _as_upload(face)
+        )
+        return _decode_image(
             ai_client.images.edit(
                 model=image_model,
-                image=_as_upload(face),
+                image=image,
                 prompt=prompt,
                 size="1024x1536",
                 quality="medium",
             )
-        ),
-    )
+        )
+
+    return _guarded(make_prompt, invoke)
 
 
 class GrokClient:
@@ -531,11 +577,17 @@ def make_grok_client(poster=None):
     return GrokClient(key, poster) if key else None
 
 
-def edit_with_grok(grok, face: bytes, who: str, shot: str, rng) -> bytes:
-    return _guarded(
-        lambda soft: build_edit_prompt(who, grok_shot_text(rng, shot, soft), soft),
-        lambda prompt: grok.edit(face, prompt),
-    )
+def edit_with_grok(grok, face: bytes, who: str, shot: str, rng, silhouette: bytes = None) -> bytes:
+    """Grok only ever sees the face image; the silhouette (when configured)
+    is folded into the back-shot prompt as words instead of a second image,
+    since the xAI edit endpoint takes a single image."""
+    use_silhouette = shot == "back" and silhouette is not None
+
+    def make_prompt(soft):
+        prompt = build_edit_prompt(who, grok_shot_text(rng, shot, soft), soft)
+        return f"{prompt} {SILHOUETTE_GROK_SENTENCE}" if use_silhouette else prompt
+
+    return _guarded(make_prompt, lambda prompt: grok.edit(face, prompt))
 
 
 # --- history ----------------------------------------------------------------
@@ -646,6 +698,19 @@ def load_face(name: str):
         return None
 
 
+def load_silhouette_ref(path) -> bytes:
+    """Read the back-view silhouette reference PNG.
+
+    Returns None (and the worker behaves exactly as before) when the file is
+    missing or unreadable.
+    """
+    p = Path(path)
+    try:
+        return p.read_bytes() if p.is_file() else None
+    except OSError:
+        return None
+
+
 def has_shot(files, shot: str) -> bool:
     """Tolerates both `<Model>_torso.png` and the older bare `torso.png`."""
     for f in files or []:
@@ -659,39 +724,41 @@ def has_shot(files, shot: str) -> bool:
 
 
 def generate_edit_shots(brain_client, ai_client, image_model, name, who, face, rng,
-                        grok=None, shots=EDIT_SHOTS):
+                        grok=None, shots=EDIT_SHOTS, silhouette=None):
     """Edit `face` into the requested shots and upload each one.
 
     The Grok/OpenAI split is always drawn over both edit shots, so a backfill
     of a single missing shot follows exactly the same random rule as a fresh
-    model.
+    model. `silhouette` (back-view reference bytes, or None) is only ever
+    used on the "back" shot, regardless of which provider handles it.
     """
     grok_shot = rng.choice(EDIT_SHOTS) if grok is not None else None
     for shot in shots:
         if shot == grok_shot:
-            data = edit_with_grok(grok, face, who, shot, rng)
+            data = edit_with_grok(grok, face, who, shot, rng, silhouette)
             _server(brain_client.upload, name, shot_filename(name, shot), data)
             _log(f"{name}: {shot} uploaded (grok edit)")
             _sleep(4)
         else:
-            data = edit_with_openai(ai_client, image_model, face, who, shot, rng)
+            data = edit_with_openai(ai_client, image_model, face, who, shot, rng, silhouette)
             _server(brain_client.upload, name, shot_filename(name, shot), data)
             _log(f"{name}: {shot} uploaded (openai edit)")
             _sleep(12)
 
 
-def create_model(brain_client, ai_client, image_model, name, who, rng, grok=None):
+def create_model(brain_client, ai_client, image_model, name, who, rng, grok=None, silhouette=None):
     """Generate + upload the three shots of one model, face first."""
     face = generate_face(ai_client, image_model, who)
     save_face(name, face)
     _server(brain_client.upload, name, shot_filename(name, "face"), face)
     _log(f"{name}: face uploaded")
     _sleep(12)
-    generate_edit_shots(brain_client, ai_client, image_model, name, who, face, rng, grok)
+    generate_edit_shots(brain_client, ai_client, image_model, name, who, face, rng, grok,
+                        silhouette=silhouette)
 
 
 def backfill_missing_shots(brain_client, ai_client, image_model, models, history,
-                           rng=random, grok=None) -> int:
+                           rng=random, grok=None, silhouette=None) -> int:
     """Finish half-built models so they don't waste a slot in the pool.
 
     Only models we created ourselves (present in the local history) and whose
@@ -714,12 +781,13 @@ def backfill_missing_shots(brain_client, ai_client, image_model, models, history
             continue
         _log(f"{name}: backfilling {', '.join(missing)}")
         generate_edit_shots(brain_client, ai_client, image_model, name, entry["concept"],
-                            face, rng, grok, shots=missing)
+                            face, rng, grok, shots=missing, silhouette=silhouette)
         filled += 1
     return filled
 
 
-def run_once(brain_client, ai_client, image_model: str, history: dict, rng=random, grok=None) -> dict:
+def run_once(brain_client, ai_client, image_model: str, history: dict, rng=random, grok=None,
+            silhouette=None) -> dict:
     """One pass: top the ACTIVE pool back up to `target`, one model at a time."""
     state = _server(brain_client.get_state)
     if state.get("paused"):
@@ -736,7 +804,8 @@ def run_once(brain_client, ai_client, image_model: str, history: dict, rng=rando
     picked = listing.get("picked") or []
     taken = {m["name"] for m in active} | {m["name"] for m in picked} | set(history["used_names"])
 
-    backfill_missing_shots(brain_client, ai_client, image_model, active, history, rng, grok)
+    backfill_missing_shots(brain_client, ai_client, image_model, active, history, rng, grok,
+                           silhouette)
 
     count = len(active)
     if count >= target:
@@ -753,7 +822,8 @@ def run_once(brain_client, ai_client, image_model: str, history: dict, rng=rando
         taken.add(name)
         save_history(history)
         _log(f"creating {name} ({concept['region']}) — pool {count + 1}/{target}")
-        create_model(brain_client, ai_client, image_model, name, concept["who"], rng, grok)
+        create_model(brain_client, ai_client, image_model, name, concept["who"], rng, grok,
+                     silhouette)
         count += 1
 
     return history
@@ -766,11 +836,12 @@ def make_ai_client():
 
 
 def loop(brain_client, ai_client, image_model: str, interval: int, once: bool,
-         rng=random, grok=None) -> None:
+         rng=random, grok=None, silhouette=None) -> None:
     history = load_history()
     while True:
         try:
-            history = run_once(brain_client, ai_client, image_model, history, rng, grok)
+            history = run_once(brain_client, ai_client, image_model, history, rng, grok,
+                               silhouette)
             save_history(history)
         except SkipLoop as e:
             _log(f"server unavailable ({e}) — skipping this round")
@@ -792,14 +863,17 @@ def main():
     a.add_argument("--token", required=True)
     a.add_argument("--interval", type=int, default=90)
     a.add_argument("--once", action="store_true")
+    a.add_argument("--silhouette-ref", default=str(DEFAULT_SILHOUETTE_REF))
     ns = a.parse_args()
 
     brain_client = BrainClient(ns.url, ns.token)
     ai_client = make_ai_client()
     grok = make_grok_client()
     image_model = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-2")
-    _log(f"casting worker up — {ns.url} (grok: {'on' if grok else 'off'})")
-    loop(brain_client, ai_client, image_model, ns.interval, ns.once, random, grok)
+    silhouette = load_silhouette_ref(ns.silhouette_ref)
+    _log(f"casting worker up — {ns.url} (grok: {'on' if grok else 'off'}, "
+        f"silhouette ref: {'on' if silhouette else 'off'})")
+    loop(brain_client, ai_client, image_model, ns.interval, ns.once, random, grok, silhouette)
 
 
 if __name__ == "__main__":

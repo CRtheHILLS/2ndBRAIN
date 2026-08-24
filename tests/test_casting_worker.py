@@ -66,12 +66,17 @@ class FakeImages:
         return _payload(self.FACE)
 
     def edit(self, model, image, prompt, size, quality):
+        files = image if isinstance(image, list) else [image]
+        datas = [f.read() for f in files]
+        names = [getattr(f, "name", None) for f in files]
         self.edit_calls.append(
             {
                 "model": model,
                 "prompt": prompt,
-                "image": image.read(),
-                "name": getattr(image, "name", None),
+                "image": datas[0],
+                "name": names[0],
+                "images": datas,
+                "names": names,
                 "size": size,
                 "quality": quality,
             }
@@ -591,19 +596,62 @@ def test_loop_runs_a_single_pass_with_once(history_file):
 # --- 6. CLI -----------------------------------------------------------------
 
 
-def test_main_wires_cli_flags_with_interval_default_90(monkeypatch, history_file):
-    monkeypatch.setattr(sys, "argv", ["brain-casting-worker", "--url", "http://x", "--token", "t"])
+def test_main_wires_cli_flags_with_interval_default_90(monkeypatch, history_file, tmp_path):
+    # Point --silhouette-ref at a path that doesn't exist so this test is
+    # deterministic regardless of whether the real default file is present
+    # on the machine running it.
+    missing_ref = tmp_path / "no-such-silhouette-ref.png"
+    monkeypatch.setattr(sys, "argv", ["brain-casting-worker", "--url", "http://x", "--token", "t",
+                                      "--silhouette-ref", str(missing_ref)])
     monkeypatch.setattr(cw, "make_ai_client", lambda: FakeAI())
     captured = {}
 
-    def fake_loop(brain_client, ai_client, image_model, interval, once, rng=None, grok=None):
+    def fake_loop(brain_client, ai_client, image_model, interval, once, rng=None, grok=None,
+                  silhouette=None):
         captured.update({"url": brain_client.url, "token": brain_client.token,
-                         "interval": interval, "once": once, "grok": grok})
+                         "interval": interval, "once": once, "grok": grok,
+                         "silhouette": silhouette})
 
     monkeypatch.setattr(cw, "loop", fake_loop)
     cw.main()
     assert captured == {"url": "http://x", "token": "t", "interval": 90,
-                        "once": False, "grok": None}
+                        "once": False, "grok": None, "silhouette": None}
+
+
+def test_main_passes_silhouette_bytes_when_ref_file_exists(monkeypatch, history_file, tmp_path):
+    ref = tmp_path / "silhouette.png"
+    ref.write_bytes(b"ref-png-bytes")
+    monkeypatch.setattr(sys, "argv", ["brain-casting-worker", "--url", "http://x", "--token", "t",
+                                      "--silhouette-ref", str(ref)])
+    monkeypatch.setattr(cw, "make_ai_client", lambda: FakeAI())
+    captured = {}
+
+    def fake_loop(brain_client, ai_client, image_model, interval, once, rng=None, grok=None,
+                  silhouette=None):
+        captured["silhouette"] = silhouette
+
+    monkeypatch.setattr(cw, "loop", fake_loop)
+    cw.main()
+    assert captured["silhouette"] == b"ref-png-bytes"
+
+
+def test_default_silhouette_ref_path():
+    p = cw.DEFAULT_SILHOUETTE_REF
+    assert p.name == "BACK_SILHOUETTE_REF_Petrova.png"
+    names = [p.parent.name, p.parent.parent.name, p.parent.parent.parent.name,
+            p.parent.parent.parent.parent.name]
+    assert names == ["refs", "Clair", "2ndBRAIN", "Desktop"]
+    assert p.parent.parent.parent.parent.parent == cw.Path.home()
+
+
+def test_load_silhouette_ref_returns_none_when_missing(tmp_path):
+    assert cw.load_silhouette_ref(tmp_path / "missing.png") is None
+
+
+def test_load_silhouette_ref_returns_bytes_when_present(tmp_path):
+    p = tmp_path / "sil.png"
+    p.write_bytes(b"abc123")
+    assert cw.load_silhouette_ref(p) == b"abc123"
 
 
 # --- 7. backfill of half-built models --------------------------------------
@@ -718,3 +766,100 @@ def test_backfill_is_skipped_when_paused(face_dir):
     ai = FakeAI()
     cw.run_once(client, ai, "gpt-image-2", _history_with(name), Rng())
     assert client.uploads == []
+
+
+# --- 8. back-shot silhouette reference --------------------------------------
+
+SILHOUETTE_BYTES = b"silhouette-ref-bytes"
+
+
+def test_openai_back_edit_receives_two_images_when_ref_exists():
+    ai = FakeAI()
+    cw.edit_with_openai(ai, "gpt-image-2", FakeImages.FACE, "a test woman", "back", Rng(),
+                        SILHOUETTE_BYTES)
+    call = ai.images.edit_calls[0]
+    assert call["images"] == [FakeImages.FACE, SILHOUETTE_BYTES]
+    assert call["names"] == ["face.png", "silhouette.png"]
+    assert call["prompt"].startswith(cw.SILHOUETTE_PREFIX)
+
+
+def test_openai_back_edit_receives_one_image_when_ref_missing():
+    ai = FakeAI()
+    cw.edit_with_openai(ai, "gpt-image-2", FakeImages.FACE, "a test woman", "back", Rng(), None)
+    call = ai.images.edit_calls[0]
+    assert call["images"] == [FakeImages.FACE]
+    assert not call["prompt"].startswith(cw.SILHOUETTE_PREFIX)
+
+
+def test_openai_torso_edit_ignores_the_silhouette_ref_even_when_configured():
+    ai = FakeAI()
+    cw.edit_with_openai(ai, "gpt-image-2", FakeImages.FACE, "a test woman", "torso", Rng(),
+                        SILHOUETTE_BYTES)
+    call = ai.images.edit_calls[0]
+    assert call["images"] == [FakeImages.FACE]
+    assert cw.SILHOUETTE_PREFIX not in call["prompt"]
+
+
+def test_grok_back_prompt_contains_the_silhouette_sentence_when_ref_exists():
+    calls = []
+    grok = make_grok(calls)
+    cw.edit_with_grok(grok, FakeImages.FACE, "a test woman", "back", Rng(), SILHOUETTE_BYTES)
+    prompt = calls[0]["json"]["prompt"]
+    assert cw.SILHOUETTE_DESC in prompt
+    assert prompt.endswith(cw.SILHOUETTE_GROK_SENTENCE)
+
+
+def test_grok_back_prompt_unchanged_when_ref_missing():
+    calls = []
+    grok = make_grok(calls)
+    cw.edit_with_grok(grok, FakeImages.FACE, "a test woman", "back", Rng(), None)
+    assert cw.SILHOUETTE_DESC not in calls[0]["json"]["prompt"]
+
+
+def test_grok_torso_prompt_ignores_the_silhouette_ref_even_when_configured():
+    calls = []
+    grok = make_grok(calls)
+    cw.edit_with_grok(grok, FakeImages.FACE, "a test woman", "torso", Rng(), SILHOUETTE_BYTES)
+    assert cw.SILHOUETTE_DESC not in calls[0]["json"]["prompt"]
+
+
+def test_run_once_threads_silhouette_ref_to_the_openai_back_shot_only(face_dir):
+    calls = []
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 1},
+                             {"models": [], "picked": []})
+    ai = FakeAI()
+    history = fresh_history()
+    # Rng(0) -> grok takes "torso" (EDIT_SHOTS[0]), openai takes "back"
+    cw.run_once(client, ai, "gpt-image-2", history, Rng(0), make_grok(calls), SILHOUETTE_BYTES)
+    assert len(ai.images.edit_calls) == 1
+    back_call = ai.images.edit_calls[0]
+    assert back_call["images"] == [FakeImages.FACE, SILHOUETTE_BYTES]
+    assert back_call["prompt"].startswith(cw.SILHOUETTE_PREFIX)
+    # the grok torso prompt is untouched by the silhouette ref
+    assert cw.SILHOUETTE_DESC not in calls[0]["json"]["prompt"]
+
+
+def test_run_once_threads_silhouette_ref_to_the_grok_back_shot_only(face_dir):
+    calls = []
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 1},
+                             {"models": [], "picked": []})
+    ai = FakeAI()
+    history = fresh_history()
+    # Rng(-1) -> grok takes "back" (EDIT_SHOTS[-1]), openai takes "torso"
+    cw.run_once(client, ai, "gpt-image-2", history, Rng(-1), make_grok(calls), SILHOUETTE_BYTES)
+    assert cw.SILHOUETTE_DESC in calls[0]["json"]["prompt"]
+    # the openai torso edit stays single-image
+    assert ai.images.edit_calls[0]["images"] == [FakeImages.FACE]
+
+
+def test_run_once_without_silhouette_ref_behaves_as_before(face_dir):
+    calls = []
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 1},
+                             {"models": [], "picked": []})
+    ai = FakeAI()
+    history = fresh_history()
+    cw.run_once(client, ai, "gpt-image-2", history, Rng(0), make_grok(calls), None)
+    back_call = ai.images.edit_calls[0]
+    assert back_call["images"] == [FakeImages.FACE]
+    assert not back_call["prompt"].startswith(cw.SILHOUETTE_PREFIX)
+    assert cw.SILHOUETTE_DESC not in calls[0]["json"]["prompt"]
