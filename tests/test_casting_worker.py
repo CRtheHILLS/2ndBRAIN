@@ -177,30 +177,53 @@ def test_build_prompt_face_matches_spec():
     )
 
 
-def test_build_prompt_torso_soft_swaps_dress_phrase():
+def test_build_prompt_torso_picks_outfit_from_list(monkeypatch):
+    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
     hard = cw.build_prompt("a test woman", "torso", soft=False)
+    assert any(outfit in hard for outfit in cw.OUTFITS_TORSO)
+    assert any(scene in hard for scene in cw.SCENES)
+
+
+def test_build_prompt_torso_soft_uses_generic_dress_phrase():
     soft = cw.build_prompt("a test woman", "torso", soft=True)
-    assert "elegant black satin evening dress" in hard
-    assert "elegant black satin evening dress" not in soft
-    assert "elegant evening dress" in soft
+    assert cw.SOFT_OUTFIT_TORSO in soft
+    assert all(outfit not in soft for outfit in cw.OUTFITS_TORSO)
 
 
-def test_build_prompt_back_soft_swaps_gown_phrase():
+def test_build_prompt_back_picks_outfit_from_list(monkeypatch):
+    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
     hard = cw.build_prompt("a test woman", "back", soft=False)
+    assert any(outfit in hard for outfit in cw.OUTFITS_BACK)
+    assert any(scene in hard for scene in cw.SCENES)
+
+
+def test_build_prompt_back_soft_uses_generic_gown_phrase():
     soft = cw.build_prompt("a test woman", "back", soft=True)
-    assert "figure-hugging satin evening gown" in hard
-    assert "figure-hugging satin evening gown" not in soft
-    assert "elegant evening gown, back view, glancing over her shoulder" in soft
+    assert cw.SOFT_OUTFIT_BACK in soft
+    assert all(outfit not in soft for outfit in cw.OUTFITS_BACK)
 
 
-def test_generate_shot_retries_with_soft_prompt_on_400():
+def test_outfit_and_scene_lists_meet_minimum_size_with_no_forbidden_items():
+    assert len(cw.OUTFITS_TORSO) >= 6
+    assert len(cw.OUTFITS_BACK) >= 5
+    forbidden = ("school", "uniform", "lingerie")
+    for outfit in cw.OUTFITS_TORSO + cw.OUTFITS_BACK:
+        lowered = outfit.lower()
+        assert not any(word in lowered for word in forbidden)
+    for register in cw.GLAM_REGISTERS:
+        lowered = register.lower()
+        assert not any(word in lowered for word in forbidden)
+
+
+def test_generate_shot_retries_with_soft_prompt_on_400(monkeypatch):
+    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
     ai = FakeAI()
     ai.images.fail_first_with = StatusError(400)
     data = cw.generate_shot(ai, "a test woman", "torso", "gpt-image-2")
     assert data == b"png-bytes"
     assert len(ai.images.calls) == 2
-    assert "elegant black satin evening dress" in ai.images.calls[0]
-    assert "elegant evening dress" in ai.images.calls[1]
+    assert any(outfit in ai.images.calls[0] for outfit in cw.OUTFITS_TORSO)
+    assert cw.SOFT_OUTFIT_TORSO in ai.images.calls[1]
 
 
 def test_generate_shot_retries_after_sleep_on_429(monkeypatch):

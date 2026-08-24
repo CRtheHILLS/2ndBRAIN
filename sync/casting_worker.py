@@ -45,32 +45,63 @@ SHOTS = {
         "natural skin texture, soft studio light, direct eye contact, gentle "
         "confident expression."
     ),
-    "torso": (
-        "Waist-up editorial portrait facing the camera, elegant black satin "
-        "evening dress, delicate necklace, poised posture, warm cinematic "
-        "light, direct gaze, soft smile."
-    ),
-    "back": (
-        "Full-body photograph from behind in an elegant figure-hugging satin "
-        "evening gown that follows her silhouette, she glances back over her "
-        "shoulder at the camera with a subtle smile, cinematic rim light, "
-        "luxury interior."
-    ),
 }
 
-# Softer rewordings used as a single retry when the primary prompt trips
-# moderation (HTTP 400). Only torso/back need softening; face is unchanged.
-SHOTS_SOFT = {
-    "face": SHOTS["face"],
-    "torso": SHOTS["torso"].replace(
-        "elegant black satin evening dress", "elegant evening dress"
-    ),
-    "back": SHOTS["back"].replace(
-        "elegant figure-hugging satin evening gown that follows her silhouette, "
-        "she glances back over her shoulder",
-        "elegant evening gown, back view, glancing over her shoulder",
-    ),
-}
+# Outfits for the torso/back shots are picked at random each generation so
+# consecutive models don't all wear the same look. No school-uniform or
+# lingerie items in either list.
+OUTFITS_TORSO = [
+    "an elegant black satin evening dress",
+    "a fitted mini cocktail dress",
+    "a crop top with a high-waisted mini skirt",
+    "a silk camisole with tailored shorts",
+    "a bodycon club dress",
+    "an off-shoulder summer top",
+]
+
+OUTFITS_BACK = [
+    "a figure-hugging satin evening gown",
+    "a backless mini dress",
+    "a crop top and denim shorts",
+    "an open-back club dress",
+    "a halter summer dress",
+]
+
+# Backdrop for the torso/back shots, also picked at random each generation.
+SCENES = [
+    "luxury interior",
+    "neon-lit club",
+    "rooftop at night",
+    "sunny summer street",
+    "studio backdrop",
+]
+
+# Softer, generic outfit phrasing used as a single retry when the primary
+# prompt trips moderation (HTTP 400). Only torso/back need softening; face
+# is unchanged.
+SOFT_OUTFIT_TORSO = "an elegant evening dress"
+SOFT_OUTFIT_BACK = "an elegant evening gown"
+
+
+def _torso_shot_text(soft: bool = False) -> str:
+    outfit = SOFT_OUTFIT_TORSO if soft else random.choice(OUTFITS_TORSO)
+    scene = random.choice(SCENES)
+    return (
+        f"Waist-up editorial portrait facing the camera, wearing {outfit}, "
+        "delicate necklace, poised posture, warm cinematic light, direct "
+        f"gaze, soft smile, {scene}."
+    )
+
+
+def _back_shot_text(soft: bool = False) -> str:
+    outfit = SOFT_OUTFIT_BACK if soft else random.choice(OUTFITS_BACK)
+    scene = random.choice(SCENES)
+    return (
+        f"Full-body photograph from behind, wearing {outfit}, she glances "
+        "back over her shoulder at the camera with a subtle smile, "
+        f"cinematic rim light, {scene}."
+    )
+
 
 # Grok "glamour" bonus shot: one extra image per model, generated via xAI's
 # Grok image endpoint instead of OpenAI. Silently skipped when XAI_API_KEY
@@ -99,6 +130,9 @@ GLAM_REGISTERS = [
     "an evening gown with a dramatic open back",
     "a gown with an elegant leg slit",
     "an off-shoulder summer dress on a sunlit terrace",
+    "a sexy mini skirt and heels on a city night street",
+    "a club outfit under neon lights",
+    "a crop top and mini shorts on a beach boardwalk",
 ]
 
 GLAM_SAFETY = "Editorial, tasteful, no lingerie, no nudity."
@@ -192,8 +226,13 @@ def _sleep(seconds: float) -> None:
 
 
 def build_prompt(who: str, shot: str, soft: bool = False) -> str:
-    shots = SHOTS_SOFT if soft else SHOTS
-    return BASE.format(who=who, shot=shots[shot])
+    if shot == "torso":
+        shot_text = _torso_shot_text(soft)
+    elif shot == "back":
+        shot_text = _back_shot_text(soft)
+    else:
+        shot_text = SHOTS[shot]
+    return BASE.format(who=who, shot=shot_text)
 
 
 def _status_of(exc: Exception):
