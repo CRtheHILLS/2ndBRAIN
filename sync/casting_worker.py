@@ -1,25 +1,30 @@
-"""Local worker that keeps the casting pipeline fed with generated candidates.
+"""Local worker that keeps the casting pool topped up with new candidates.
 
-Polls the 2nd BRAIN server's /casting/state and /casting/list endpoints. When
-generation isn't paused it (a) fills in any missing shot (face/torso/back)
-for active (non-picked) models, (b) spins up a brand-new model from the
-CONCEPTS rotation whenever the active headcount is below the round's target,
-generating all three of its shots, and (c) ensures every active
-cached-description model also has a `<Model>_glam.png` bonus shot. Every
-generated PNG is uploaded back to the server via POST /casting/upload.
+Contract (v2):
 
-Image generation goes through OpenAI's images API (`OpenAI().images.generate`)
-for face/torso/back, and through xAI's Grok image endpoint for the glam bonus
-shot (skipped silently when XAI_API_KEY isn't set).
-Since the server has no place to durably store "who is this model" free text,
-this worker keeps its own small local cache (~/.brain-casting.json) mapping
-model name -> concept description, so a later run can regenerate a missing
-shot for a model it created earlier with the same description. Models that
-show up in /casting/list without a cache entry (e.g. uploaded manually) are
-left alone for step (a) — there's nothing to regenerate them from.
+* The pool is exactly `target` (default 10) ACTIVE — i.e. not yet picked —
+  models. When the server already has that many, the worker does nothing.
+  When it has fewer, the worker creates models ONE AT A TIME until the pool is
+  full again (repeating inside the same run).
+* The worker never deletes anything. It only adds.
+* A model is three shots of the SAME woman, held together by a reference
+  chain: shot 1 (`face`) is generated from the concept text with OpenAI
+  `images.generate`; shots 2 and 3 (`torso`, `back`) are both *edits of the
+  face image*. One of them (chosen at random) is edited by OpenAI, the other
+  by xAI's Grok image-edit endpoint — so every model gets one "glam register"
+  frame. Without XAI_API_KEY both edits go to OpenAI.
+* Every PNG is uploaded to the server (POST /casting/upload) immediately after
+  it is generated, as `<Model_With_Underscores>_<shot>.png`.
+
+State that the server cannot hold (which concept text a model was born from,
+and which names have already been burned) lives in ~/.brain-casting.json:
+
+    {"models": {"Claire Kim": {"concept": "...", "region": "korean"}},
+     "used_names": ["Claire Kim"], "concept_idx": 3}
 """
 import argparse
 import base64
+import io
 import json
 import os
 import random
@@ -29,27 +34,39 @@ from pathlib import Path
 
 import httpx
 
-CACHE = Path.home() / ".brain-casting.json"
+HISTORY = Path.home() / ".brain-casting.json"
 
+TARGET_DEFAULT = 10
 SHOT_ORDER = ("face", "torso", "back")
+EDIT_SHOTS = ("torso", "back")
+
+# --- prompt scaffolding ----------------------------------------------------
 
 BASE = (
     "Photorealistic professional model photography, Vogue editorial level. "
-    "Subject: {who}, 173cm, slender long-legged model proportions. {shot} "
-    "Fully clothed, tasteful."
+    "Subject: {who}, 173cm, slender long legs, softly curved feminine figure, "
+    "graceful glamorous silhouette. {shot} Fully clothed, tasteful."
 )
 
-SHOTS = {
-    "face": (
-        "Extreme close-up beauty portrait, face filling the frame, flawless "
-        "natural skin texture, soft studio light, direct eye contact, gentle "
-        "confident expression."
-    ),
-}
+# Softened variant used for the single moderation retry: the figure phrase is
+# dropped entirely.
+BASE_SOFT = (
+    "Photorealistic professional model photography, Vogue editorial level. "
+    "Subject: {who}, 173cm. {shot} Fully clothed, tasteful."
+)
 
-# Outfits for the torso/back shots are picked at random each generation so
-# consecutive models don't all wear the same look. No school-uniform or
-# lingerie items in either list.
+REFERENCE_PREFIX = (
+    "Same woman as the reference image — identical face, hair, skin and body. "
+)
+
+FACE_SHOT = (
+    "Extreme close-up beauty portrait, face filling the frame, flawless "
+    "natural skin texture, soft studio light, direct eye contact, gentle "
+    "confident expression."
+)
+
+# Outfits are re-rolled for every shot so consecutive models don't all wear
+# the same look. No school uniforms and no lingerie in any list.
 OUTFITS_TORSO = [
     "an elegant black satin evening dress",
     "a fitted mini cocktail dress",
@@ -57,6 +74,10 @@ OUTFITS_TORSO = [
     "a silk camisole with tailored shorts",
     "a bodycon club dress",
     "an off-shoulder summer top",
+    "a halter neck cocktail dress",
+    "a tailored blazer worn over a silk top",
+    "a knitted crop top with wide linen trousers",
+    "a slip dress with a delicate gold chain",
 ]
 
 OUTFITS_BACK = [
@@ -65,9 +86,11 @@ OUTFITS_BACK = [
     "a crop top and denim shorts",
     "an open-back club dress",
     "a halter summer dress",
+    "a long silk gown with a low open back",
+    "a fitted knit dress with a keyhole back",
+    "a wrap mini dress and strappy heels",
 ]
 
-# Backdrop for the torso/back shots, also picked at random each generation.
 SCENES = [
     "luxury interior",
     "neon-lit club",
@@ -76,55 +99,31 @@ SCENES = [
     "studio backdrop",
 ]
 
-# Softer, generic outfit phrasing used as a single retry when the primary
-# prompt trips moderation (HTTP 400). Only torso/back need softening; face
-# is unchanged.
+# Plain wording used by the moderation retry.
 SOFT_OUTFIT_TORSO = "an elegant evening dress"
 SOFT_OUTFIT_BACK = "an elegant evening gown"
+SOFT_REGISTER = "an elegant evening gown"
 
+# --- Grok "glam register" shot ---------------------------------------------
 
-def _torso_shot_text(soft: bool = False) -> str:
-    outfit = SOFT_OUTFIT_TORSO if soft else random.choice(OUTFITS_TORSO)
-    scene = random.choice(SCENES)
-    return (
-        f"Waist-up editorial portrait facing the camera, wearing {outfit}, "
-        "delicate necklace, poised posture, warm cinematic light, direct "
-        f"gaze, soft smile, {scene}."
-    )
+XAI_EDIT_URL = "https://api.x.ai/v1/images/edits"
+XAI_IMAGE_MODEL = "grok-imagine-image"
 
-
-def _back_shot_text(soft: bool = False) -> str:
-    outfit = SOFT_OUTFIT_BACK if soft else random.choice(OUTFITS_BACK)
-    scene = random.choice(SCENES)
-    return (
-        f"Full-body photograph from behind, wearing {outfit}, she glances "
-        "back over her shoulder at the camera with a subtle smile, "
-        f"cinematic rim light, {scene}."
-    )
-
-
-# Grok "glamour" bonus shot: one extra image per model, generated via xAI's
-# Grok image endpoint instead of OpenAI. Silently skipped when XAI_API_KEY
-# isn't set. View and pose/register are chosen at random each time.
-XAI_IMAGE_URL = "https://api.x.ai/v1/images/generations"
-XAI_IMAGE_MODEL = "grok-imagine-image-quality"
-
-GLAM_VIEWS = ("front", "back")
-
-# At least 8 distinct, elegant, dynamic poses.
+# At least 8 distinct poses, all readable from the front or from behind.
 POSES = [
-    "walking toward the camera mid-stride",
+    "mid-stride in a confident walk",
     "seated elegantly on a lounge chair",
     "leaning against a railing, gazing into the distance",
     "hair caught dramatically by the wind",
-    "caught mid-turn, glancing back over her shoulder",
+    "caught mid-turn, glancing over her shoulder",
     "arms raised in a graceful stretch overhead",
     "stepping down a grand staircase",
-    "looking back mid-stride with a confident glance",
+    "standing tall with one hand resting on her hip",
+    "reclining gracefully on a sun lounger",
+    "twirling so the fabric flares around her",
 ]
 
-# Styling register: one notch more glamorous than the other shots, but never
-# beyond this fixed set.
+# One notch more glamorous than the OpenAI shots, but never beyond this set.
 GLAM_REGISTERS = [
     "elegant resort swimwear beside an infinity pool",
     "an evening gown with a dramatic open back",
@@ -137,102 +136,218 @@ GLAM_REGISTERS = [
 
 GLAM_SAFETY = "Editorial, tasteful, no lingerie, no nudity."
 
-GLAM_IDENTITY = (
-    "Photorealistic professional model photography, Vogue editorial level. "
-    "Subject: {who}, 173cm, slender long-legged model proportions."
-)
-
-
-def build_glam_prompt(who: str, view: str, pose: str, register: str) -> str:
-    view_desc = "Front view" if view == "front" else "Back view"
-    identity = GLAM_IDENTITY.format(who=who)
-    return (
-        f"{identity} {view_desc}, one notch more glamorous, {pose}, "
-        f"wearing {register}. {GLAM_SAFETY}"
-    )
-
-
-def _glam_filename(name: str) -> str:
-    return f"{name}_glam.png"
-
-
-def _has_glam(name: str, files) -> bool:
-    target = Path(_glam_filename(name)).stem
-    return any(Path(f).stem == target for f in files)
-
-
-def generate_glam_shot(who: str):
-    """Generate one Grok glamour PNG for `who`, or None if XAI_API_KEY unset."""
-    api_key = os.environ.get("XAI_API_KEY")
-    if not api_key:
-        return None
-    view = random.choice(GLAM_VIEWS)
-    pose = random.choice(POSES)
-    register = random.choice(GLAM_REGISTERS)
-    prompt = build_glam_prompt(who, view, pose, register)
-    r = httpx.post(
-        XAI_IMAGE_URL,
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={
-            "model": XAI_IMAGE_MODEL,
-            "prompt": prompt,
-            "n": 1,
-            "response_format": "b64_json",
-        },
-        timeout=120,
-    )
-    r.raise_for_status()
-    payload = r.json()
-    return base64.b64decode(payload["data"][0]["b64_json"])
-
-
-# Casting pool: no ethnicities beyond this fixed rotation. Each entry is a
-# full English description in the same style as the Korean example.
+# --- casting concepts -------------------------------------------------------
+# Fixed rotation; no ethnic groups beyond these. `weight` makes a concept come
+# round more often. Every entry carries the surname region to draw from.
 CONCEPTS = [
-    "tall American woman, mid-20s, sun-kissed fair skin, golden blonde hair, "
-    "bright blue eyes, athletic all-American beauty-queen elegance",
-    "tall American woman, mid-20s, warm fair skin, glossy chestnut-brown hair, "
-    "soft brown eyes, approachable girl-next-door glamour",
-    "tall Spanish woman, mid-20s, sun-warmed olive skin, dark wavy hair, deep "
-    "brown eyes, fiery flamenco-elegant beauty",
-    "tall Argentinian woman, mid-20s, fair olive skin, chestnut hair, "
-    "striking hazel eyes, sculpted Latin American runway-model beauty",
-    "tall Russian woman, mid-20s, pale porcelain skin, platinum-blonde hair, "
-    "ice-blue eyes, poised ice-queen elegance",
-    "tall French woman, mid-20s, fair skin, sleek dark bob, refined "
-    "cheekbones, understated Parisian elegance",
-    "tall Italian woman, mid-20s, sun-kissed olive skin, glossy dark-brown "
-    "hair, warm brown eyes, sculptural Mediterranean elegance",
-    "tall Scandinavian woman, mid-20s, fair porcelain skin, ash-blonde hair, "
-    "clear pale-blue eyes, effortless Nordic elegance",
-    "tall Korean woman, mid-20s, luminous fair skin, sleek long black hair, "
-    "elegant cat-like eyes, sophisticated Seoul-chic beauty",
-    "tall Japanese woman, mid-20s, porcelain-fair skin, silky black hair, "
-    "delicate features, ethereal East-Asian beauty",
+    {
+        "region": "anglo",
+        "weight": 2,
+        "who": (
+            "tall American woman, mid-20s, sun-kissed fair skin, golden blonde "
+            "hair, bright blue eyes, athletic all-American beauty-queen elegance"
+        ),
+    },
+    {
+        "region": "anglo",
+        "weight": 2,
+        "who": (
+            "tall American woman, mid-20s, warm fair skin, glossy chestnut-brown "
+            "hair, soft brown eyes, polished girl-next-door glamour"
+        ),
+    },
+    {
+        "region": "spanish",
+        "weight": 1,
+        "who": (
+            "tall Spanish woman, mid-20s, sun-warmed olive skin, dark wavy hair, "
+            "deep brown eyes, fiery flamenco-elegant beauty"
+        ),
+    },
+    {
+        "region": "spanish",
+        "weight": 1,
+        "who": (
+            "tall Argentinian woman, mid-20s, fair olive skin, chestnut hair, "
+            "striking hazel eyes, sculpted Latin American runway-model beauty"
+        ),
+    },
+    {
+        "region": "russian",
+        "weight": 1,
+        "who": (
+            "tall Russian woman, mid-20s, pale porcelain skin, platinum-blonde "
+            "hair, ice-blue eyes, poised ice-queen elegance"
+        ),
+    },
+    {
+        "region": "french",
+        "weight": 1,
+        "who": (
+            "tall French woman, mid-20s, fair skin, sleek dark bob, refined "
+            "cheekbones, understated Parisian elegance"
+        ),
+    },
+    {
+        "region": "italian",
+        "weight": 1,
+        "who": (
+            "tall Italian woman, mid-20s, sun-kissed olive skin, glossy "
+            "dark-brown hair, warm brown eyes, sculptural Mediterranean elegance"
+        ),
+    },
+    {
+        "region": "scandinavian",
+        "weight": 1,
+        "who": (
+            "tall Scandinavian woman, mid-20s, fair porcelain skin, ash-blonde "
+            "hair, clear pale-blue eyes, effortless Nordic elegance"
+        ),
+    },
+    {
+        "region": "slavic",
+        "weight": 1,
+        "who": (
+            "tall Czech woman, mid-20s, fair skin, light-brown hair, striking "
+            "green eyes, high-fashion Prague runway elegance"
+        ),
+    },
+    {
+        "region": "slavic",
+        "weight": 1,
+        "who": (
+            "tall Polish woman, mid-20s, fair skin, honey-blonde hair, clear "
+            "grey-blue eyes, refined Central European editorial beauty"
+        ),
+    },
+    {
+        "region": "korean",
+        "weight": 2,
+        "who": (
+            "tall Korean woman, mid-20s, actress-level beauty, luminous flawless "
+            "skin, elegant double-lidded almond eyes, refined small V-line face, "
+            "glossy long black hair, sophisticated Seoul-chic elegance"
+        ),
+    },
+    {
+        "region": "japanese",
+        "weight": 2,
+        "who": (
+            "tall Japanese woman, mid-20s, Tokyo model-level beauty, porcelain "
+            "flawless skin, large expressive double-lidded eyes, delicate refined "
+            "features, silky long black hair, elegant Ginza-chic sophistication"
+        ),
+    },
 ]
 
-SURNAME_POOL = [
-    "Larsen", "Bergström", "Nilsson", "Andersson", "Karlsson", "Johansson",
-    "Svensson", "Lindgren", "Ahlberg", "Sorensen", "Dahl", "Ekstrom",
-    "Holt", "Reyes", "Moreno", "Delgado", "Rossi", "Romano", "Conti",
-    "Marchetti", "Fontaine", "Moreau", "Lefevre", "Bernard", "Petrov",
-    "Ivanova", "Volkova", "Sokolova", "Kim", "Park", "Lee", "Choi",
-    "Tanaka", "Sato", "Suzuki", "Watanabe",
-]
+
+def _build_rotation() -> list:
+    """Weighted rotation: heavier concepts reappear in later passes."""
+    order = []
+    for pass_no in range(max(c["weight"] for c in CONCEPTS)):
+        for idx, concept in enumerate(CONCEPTS):
+            if concept["weight"] > pass_no:
+                order.append(idx)
+    return order
+
+
+ROTATION = _build_rotation()
+
+# --- surname pool (>= 300 unique, grouped by region) ------------------------
+
+SURNAMES = {
+    "anglo": [
+        "Anderson", "Bailey", "Barnes", "Bennett", "Brooks", "Carter",
+        "Chandler", "Coleman", "Collins", "Cooper", "Davis", "Dawson",
+        "Ellis", "Foster", "Gibson", "Grant", "Harper", "Hayes", "Hudson",
+        "Hunter", "Jenkins", "Kendall", "Lawson", "Mercer", "Mitchell",
+        "Morgan", "Parker", "Preston", "Quinn", "Reeves", "Sawyer",
+        "Sinclair", "Sullivan", "Turner", "Walker", "Whitaker",
+    ],
+    "spanish": [
+        "Aguilar", "Alvarez", "Blanco", "Cabrera", "Campos", "Castillo",
+        "Delgado", "Dominguez", "Escobar", "Espinosa", "Fernandez",
+        "Gallardo", "Garrido", "Gimenez", "Guerrero", "Herrera", "Ibarra",
+        "Jimenez", "Lozano", "Marquez", "Medina", "Mendoza", "Montoya",
+        "Morales", "Moreno", "Navarro", "Ortega", "Pacheco", "Peralta",
+        "Quintana", "Reyes", "Rivas", "Salazar", "Serrano", "Valdez", "Vega",
+    ],
+    "russian": [
+        "Andreeva", "Belova", "Bogdanova", "Dmitrieva", "Egorova", "Fedorova",
+        "Gordeeva", "Ivanova", "Kalinina", "Karpova", "Kazakova", "Kirillova",
+        "Kovaleva", "Kuznetsova", "Lebedeva", "Makarova", "Medvedeva",
+        "Melnikova", "Mikhailova", "Morozova", "Nikolaeva", "Novikova",
+        "Orlova", "Pavlova", "Petrova", "Popova", "Romanova", "Sergeeva",
+        "Smirnova", "Sokolova", "Stepanova", "Tarasova", "Volkova", "Zaitseva",
+    ],
+    "french": [
+        "Allard", "Aubert", "Barbier", "Beaumont", "Bernard", "Blanchard",
+        "Bonnet", "Boucher", "Chevalier", "Clement", "Colbert", "Dubois",
+        "Duval", "Fabre", "Fontaine", "Gaillard", "Garnier", "Girard",
+        "Granger", "Lacroix", "Lambert", "Laurent", "Lefevre", "Leroy",
+        "Marchand", "Mercier", "Moreau", "Noel", "Perrin", "Renard",
+        "Rousseau", "Thibault", "Vidal", "Voisin",
+    ],
+    "italian": [
+        "Amato", "Barbieri", "Bellini", "Bianchi", "Bruno", "Caruso",
+        "Colombo", "Conti", "Costa", "Esposito", "Ferrari", "Ferraro",
+        "Fiore", "Fontana", "Gallo", "Gatti", "Giordano", "Greco",
+        "Lombardi", "Mancini", "Marchetti", "Marino", "Martini", "Messina",
+        "Moretti", "Neri", "Orlando", "Pagano", "Pellegrini", "Ricci",
+        "Rizzo", "Romano", "Rossi", "Russo", "Serra", "Vitale",
+    ],
+    "scandinavian": [
+        "Ahlberg", "Andersson", "Aune", "Berg", "Bergman", "Bergstrom",
+        "Bjork", "Dahl", "Eklund", "Ekstrom", "Engstrom", "Falk",
+        "Fredriksson", "Gustafsson", "Hagen", "Hansen", "Haugen", "Hedlund",
+        "Holm", "Jensen", "Johansson", "Karlsson", "Larsen", "Lindberg",
+        "Lindgren", "Lund", "Moller", "Nilsson", "Nordstrom", "Olsen",
+        "Sandberg", "Sorensen", "Strand", "Sundberg", "Svensson", "Wallin",
+    ],
+    "slavic": [
+        "Adamczyk", "Baran", "Cerny", "Dudek", "Dvorak", "Fiala", "Gorski",
+        "Havel", "Horak", "Jankowski", "Jelinek", "Kaminski", "Kovar",
+        "Kowalski", "Kral", "Kucera", "Lewandowski", "Majewski", "Marek",
+        "Masek", "Nemec", "Novak", "Novotny", "Nowak", "Pawlak", "Pokorny",
+        "Prochazka", "Ruzicka", "Sedlak", "Sikora", "Simek", "Sokolowski",
+        "Svoboda", "Urban", "Vesely", "Wojcik", "Zawadzki", "Zeman",
+        "Zielinski",
+    ],
+    "korean": [
+        "Ahn", "Bae", "Baek", "Chae", "Cho", "Choi", "Chun", "Ha", "Han",
+        "Hong", "Hwang", "Jang", "Jeon", "Joo", "Jung", "Kang", "Kim", "Ko",
+        "Koo", "Kwon", "Lee", "Lim", "Min", "Moon", "Nam", "Noh", "Oh",
+        "Park", "Ryu", "Seo", "Shin", "Sohn", "Song", "Woo", "Yang", "Yeo",
+        "Yoon", "Yu",
+    ],
+    "japanese": [
+        "Abe", "Aoki", "Endo", "Fujita", "Fukuda", "Goto", "Hasegawa",
+        "Hashimoto", "Hayashi", "Ikeda", "Inoue", "Ishii", "Ishikawa", "Ito",
+        "Kato", "Kimura", "Kobayashi", "Kondo", "Matsumoto", "Mori",
+        "Murakami", "Nakamura", "Nishimura", "Ogawa", "Okada", "Ota",
+        "Sakamoto", "Saito", "Sasaki", "Sato", "Shimizu", "Suzuki",
+        "Takahashi", "Tanaka", "Watanabe", "Yamada", "Yamaguchi",
+        "Yamamoto", "Yamazaki", "Yoshida",
+    ],
+}
+
+ALL_SURNAMES = [s for names in SURNAMES.values() for s in names]
+
+# --- small helpers ----------------------------------------------------------
+
+RETRY_BACKOFF = (2, 5, 10)
+
+
+class SkipLoop(Exception):
+    """The server is unreachable; give up on this loop iteration."""
 
 
 def _sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
-def build_prompt(who: str, shot: str, soft: bool = False) -> str:
-    if shot == "torso":
-        shot_text = _torso_shot_text(soft)
-    elif shot == "back":
-        shot_text = _back_shot_text(soft)
-    else:
-        shot_text = SHOTS[shot]
-    return BASE.format(who=who, shot=shot_text)
+def _log(msg: str) -> None:
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
 def _status_of(exc: Exception):
@@ -241,52 +356,247 @@ def _status_of(exc: Exception):
     )
 
 
-def _call_images_generate(client, model: str, prompt: str):
-    return client.images.generate(
-        model=model, prompt=prompt, size="1024x1536", quality="medium"
+def _is_transient(exc: Exception) -> bool:
+    status = _status_of(exc)
+    if status is not None:
+        try:
+            return 500 <= int(status) < 600
+        except (TypeError, ValueError):
+            return False
+    return isinstance(exc, (httpx.RequestError, ConnectionError, TimeoutError, OSError))
+
+
+def _server(fn, *args, **kwargs):
+    """Call a server endpoint, retrying 3x on 5xx/connection errors.
+
+    After the last retry raises SkipLoop so the caller can drop this round
+    instead of crashing.
+    """
+    attempts = len(RETRY_BACKOFF) + 1
+    for i in range(attempts):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            if not _is_transient(e):
+                raise
+            if i == attempts - 1:
+                raise SkipLoop(str(e) or type(e).__name__) from e
+            _log(f"server error ({e}) — retry {i + 1}/{len(RETRY_BACKOFF)} in {RETRY_BACKOFF[i]}s")
+            _sleep(RETRY_BACKOFF[i])
+
+
+def _guarded(make_prompt, invoke):
+    """Run `invoke(make_prompt(soft))`, handling moderation and rate limits.
+
+    400 (moderation) -> one retry with the softened prompt.
+    429 (rate limit) -> sleep 20s, one retry with a fresh hard prompt.
+    """
+    try:
+        return invoke(make_prompt(False))
+    except Exception as e:
+        status = _status_of(e)
+        if status == 400:
+            _log("moderation reject — retrying once with softened prompt")
+            return invoke(make_prompt(True))
+        if status == 429:
+            _log("rate limited — sleeping 20s then retrying once")
+            _sleep(20)
+            return invoke(make_prompt(False))
+        raise
+
+
+# --- prompt builders --------------------------------------------------------
+
+
+def build_prompt(who: str, shot_text: str, soft: bool = False) -> str:
+    return (BASE_SOFT if soft else BASE).format(who=who, shot=shot_text)
+
+
+def build_face_prompt(who: str, soft: bool = False) -> str:
+    return build_prompt(who, FACE_SHOT, soft)
+
+
+def build_edit_prompt(who: str, shot_text: str, soft: bool = False) -> str:
+    """Edit prompts always open with the identity-lock sentence."""
+    return REFERENCE_PREFIX + build_prompt(who, shot_text, soft)
+
+
+def torso_shot_text(rng, soft: bool = False) -> str:
+    outfit = SOFT_OUTFIT_TORSO if soft else rng.choice(OUTFITS_TORSO)
+    scene = rng.choice(SCENES)
+    return (
+        f"Waist-up editorial portrait facing the camera, wearing {outfit}, "
+        "poised posture, warm cinematic light, direct gaze, soft smile, "
+        f"{scene}."
     )
+
+
+def back_shot_text(rng, soft: bool = False) -> str:
+    outfit = SOFT_OUTFIT_BACK if soft else rng.choice(OUTFITS_BACK)
+    scene = rng.choice(SCENES)
+    return (
+        f"Full-body photograph from behind, wearing {outfit}, she glances back "
+        "over her shoulder at the camera with a subtle smile, cinematic rim "
+        f"light, {scene}."
+    )
+
+
+def openai_shot_text(rng, shot: str, soft: bool = False) -> str:
+    return torso_shot_text(rng, soft) if shot == "torso" else back_shot_text(rng, soft)
+
+
+def grok_shot_text(rng, shot: str, soft: bool = False) -> str:
+    """The glam register: one notch more glamorous, always safety-capped."""
+    pose = rng.choice(POSES)
+    register = SOFT_REGISTER if soft else rng.choice(GLAM_REGISTERS)
+    view = (
+        "Waist-up view facing the camera"
+        if shot == "torso"
+        else "Full-body view from behind, glancing back over her shoulder"
+    )
+    return f"{view}, {pose}, wearing {register}. {GLAM_SAFETY}"
+
+
+# --- image generation -------------------------------------------------------
 
 
 def _decode_image(result) -> bytes:
     return base64.b64decode(result.data[0].b64_json)
 
 
-def generate_shot(client, who: str, shot: str, model: str) -> bytes:
-    """Generate one PNG for `who`/`shot` and return its raw bytes.
+def _as_upload(image_bytes: bytes, name: str = "face.png"):
+    buf = io.BytesIO(image_bytes)
+    buf.name = name
+    return buf
 
-    On a 400 (moderation reject) retries once with the softened prompt.
-    On a 429 (rate limit) sleeps 20s and retries once with the same prompt.
-    Any other error, or a second failure, propagates.
-    """
+
+def generate_face(ai_client, image_model: str, who: str) -> bytes:
+    """Shot 1: a fresh face from the concept text."""
+    return _guarded(
+        lambda soft: build_face_prompt(who, soft),
+        lambda prompt: _decode_image(
+            ai_client.images.generate(
+                model=image_model, prompt=prompt, size="1024x1536", quality="medium"
+            )
+        ),
+    )
+
+
+def edit_with_openai(ai_client, image_model: str, face: bytes, who: str, shot: str, rng) -> bytes:
+    """Shots 2/3 via OpenAI, using the face image as the reference."""
+    return _guarded(
+        lambda soft: build_edit_prompt(who, openai_shot_text(rng, shot, soft), soft),
+        lambda prompt: _decode_image(
+            ai_client.images.edit(
+                model=image_model,
+                image=_as_upload(face),
+                prompt=prompt,
+                size="1024x1536",
+                quality="medium",
+            )
+        ),
+    )
+
+
+class GrokClient:
+    """xAI image-edit client (image in, edited image out)."""
+
+    def __init__(self, api_key: str, poster=None):
+        self.api_key = api_key
+        self._post = poster or httpx.post
+
+    def edit(self, image: bytes, prompt: str) -> bytes:
+        b64 = base64.b64encode(image).decode()
+        r = self._post(
+            XAI_EDIT_URL,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={
+                "model": XAI_IMAGE_MODEL,
+                "image": {"url": f"data:image/png;base64,{b64}"},
+                "prompt": prompt,
+                "response_format": "b64_json",
+            },
+            timeout=180,
+        )
+        r.raise_for_status()
+        return base64.b64decode(r.json()["data"][0]["b64_json"])
+
+
+def make_grok_client(poster=None):
+    """None when XAI_API_KEY isn't set — the caller then uses OpenAI twice."""
+    key = os.environ.get("XAI_API_KEY")
+    return GrokClient(key, poster) if key else None
+
+
+def edit_with_grok(grok, face: bytes, who: str, shot: str, rng) -> bytes:
+    return _guarded(
+        lambda soft: build_edit_prompt(who, grok_shot_text(rng, shot, soft), soft),
+        lambda prompt: grok.edit(face, prompt),
+    )
+
+
+# --- history ----------------------------------------------------------------
+
+
+def _empty_history() -> dict:
+    return {"models": {}, "used_names": [], "concept_idx": 0}
+
+
+def _normalize_history(data) -> dict:
+    """Accept the v1 flat cache ({name: who, _concept_idx: n}) too."""
+    history = _empty_history()
+    if not isinstance(data, dict):
+        return history
+    if "models" in data or "used_names" in data:
+        history["models"] = dict(data.get("models") or {})
+        history["used_names"] = list(data.get("used_names") or [])
+        history["concept_idx"] = int(data.get("concept_idx") or 0)
+    else:
+        for name, who in data.items():
+            if name.startswith("_") or not isinstance(who, str):
+                continue
+            history["models"][name] = {"concept": who, "region": None}
+        history["concept_idx"] = int(data.get("_concept_idx") or 0)
+    for name in history["models"]:
+        if name not in history["used_names"]:
+            history["used_names"].append(name)
+    return history
+
+
+def load_history() -> dict:
+    if not HISTORY.exists():
+        return _empty_history()
     try:
-        result = _call_images_generate(client, model, build_prompt(who, shot, soft=False))
-    except Exception as e:
-        status = _status_of(e)
-        if status == 400:
-            result = _call_images_generate(client, model, build_prompt(who, shot, soft=True))
-        elif status == 429:
-            _sleep(20)
-            result = _call_images_generate(client, model, build_prompt(who, shot, soft=False))
-        else:
-            raise
-    return _decode_image(result)
+        return _normalize_history(json.loads(HISTORY.read_text("utf-8")))
+    except (json.JSONDecodeError, OSError):
+        return _empty_history()
 
 
-def _next_concept(cache: dict) -> str:
-    idx = cache.get("_concept_idx", 0) % len(CONCEPTS)
-    cache["_concept_idx"] = (idx + 1) % len(CONCEPTS)
-    return CONCEPTS[idx]
+def save_history(history: dict) -> None:
+    HISTORY.write_text(json.dumps(history, ensure_ascii=False, indent=1), "utf-8")
 
 
-def _new_model_name(existing: set) -> str:
-    pool = [s for s in SURNAME_POOL if f"Claire {s}" not in existing]
+def next_concept(history: dict) -> dict:
+    idx = int(history.get("concept_idx", 0)) % len(ROTATION)
+    history["concept_idx"] = (idx + 1) % len(ROTATION)
+    return CONCEPTS[ROTATION[idx]]
+
+
+def new_model_name(region: str, taken, rng) -> str:
+    """"Claire <surname>", surname drawn from the concept's own region."""
+    pool = [s for s in SURNAMES.get(region, []) if f"Claire {s}" not in taken]
+    if not pool:  # region exhausted — fall back to the whole pool
+        pool = [s for s in ALL_SURNAMES if f"Claire {s}" not in taken]
     if not pool:
-        pool = SURNAME_POOL
-    return "Claire " + random.choice(pool)
+        raise RuntimeError("surname pool exhausted")
+    return "Claire " + rng.choice(pool)
+
+
+# --- server client ----------------------------------------------------------
 
 
 class BrainClient:
-    """Thin sync HTTP client for the casting API endpoints this worker uses."""
+    """Thin sync HTTP client for the casting endpoints this worker uses."""
 
     def __init__(self, url: str, token: str):
         self.url, self.token = url.rstrip("/"), token
@@ -312,77 +622,70 @@ class BrainClient:
         r.raise_for_status()
 
 
-def _generate_and_upload(brain_client, ai_client, image_model, name, who, shot):
-    data = generate_shot(ai_client, who, shot, image_model)
-    brain_client.upload(name, f"{shot}.png", data)
+def shot_filename(name: str, shot: str) -> str:
+    return f"{name.replace(' ', '_')}_{shot}.png"
+
+
+# --- the pipeline -----------------------------------------------------------
+
+
+def create_model(brain_client, ai_client, image_model, name, who, rng, grok=None):
+    """Generate + upload the three shots of one model, face first."""
+    face = generate_face(ai_client, image_model, who)
+    _server(brain_client.upload, name, shot_filename(name, "face"), face)
+    _log(f"{name}: face uploaded")
     _sleep(12)
 
+    grok_shot = rng.choice(EDIT_SHOTS) if grok is not None else None
+    for shot in EDIT_SHOTS:
+        if shot == grok_shot:
+            data = edit_with_grok(grok, face, who, shot, rng)
+            _server(brain_client.upload, name, shot_filename(name, shot), data)
+            _log(f"{name}: {shot} uploaded (grok edit)")
+            _sleep(4)
+        else:
+            data = edit_with_openai(ai_client, image_model, face, who, shot, rng)
+            _server(brain_client.upload, name, shot_filename(name, shot), data)
+            _log(f"{name}: {shot} uploaded (openai edit)")
+            _sleep(12)
 
-def _generate_and_upload_glam(brain_client, name, who):
-    data = generate_glam_shot(who)
-    if data is None:
-        return
-    brain_client.upload(name, _glam_filename(name), data)
-    _sleep(4)
 
-
-def run_once(brain_client, ai_client, image_model: str, cache: dict) -> dict:
-    """Run a single pipeline pass. Returns the (possibly updated) cache dict.
-
-    `cache` maps model name -> concept description; a reserved "_concept_idx"
-    key tracks rotation position and is never treated as a model name.
-    """
-    state = brain_client.get_state()
+def run_once(brain_client, ai_client, image_model: str, history: dict, rng=random, grok=None) -> dict:
+    """One pass: top the ACTIVE pool back up to `target`, one model at a time."""
+    state = _server(brain_client.get_state)
     if state.get("paused"):
-        return cache
+        _log("generation paused — nothing to do")
+        return history
 
-    listing = brain_client.get_list()
-    active_models = listing.get("models", [])
-    picked_models = listing.get("picked", [])
-    all_names = {m["name"] for m in active_models} | {m["name"] for m in picked_models}
+    try:
+        target = int(state.get("target") or TARGET_DEFAULT)
+    except (TypeError, ValueError):
+        target = TARGET_DEFAULT
 
-    # (a) fill missing shots for active (non-picked) models
-    for m in active_models:
-        name = m["name"]
-        have = {Path(f).stem for f in m["files"]}
-        missing = [s for s in SHOT_ORDER if s not in have]
-        if not missing:
-            continue
-        who = cache.get(name)
-        if not who:
-            continue  # no cached description for this model; can't regenerate it
-        for shot in missing:
-            _generate_and_upload(brain_client, ai_client, image_model, name, who, shot)
+    listing = _server(brain_client.get_list)
+    active = listing.get("models") or []
+    picked = listing.get("picked") or []
+    taken = {m["name"] for m in active} | {m["name"] for m in picked} | set(history["used_names"])
 
-    # (b) top up the round if we're under target
-    target = state.get("target", 10)
-    if len(active_models) < target:
-        name = _new_model_name(all_names)
-        who = _next_concept(cache)
-        cache[name] = who
-        for shot in SHOT_ORDER:
-            _generate_and_upload(brain_client, ai_client, image_model, name, who, shot)
-        _generate_and_upload_glam(brain_client, name, who)
+    count = len(active)
+    if count >= target:
+        _log(f"pool full ({count}/{target}) — nothing to do")
+        return history
 
-    # (c) ensure every other active cached-description model has a glam shot
-    for m in active_models:
-        name = m["name"]
-        who = cache.get(name)
-        if not who:
-            continue
-        if _has_glam(name, m["files"]):
-            continue
-        _generate_and_upload_glam(brain_client, name, who)
+    while count < target:
+        concept = next_concept(history)
+        name = new_model_name(concept["region"], taken, rng)
+        # Burn the name before generating: a crash mid-model must not hand the
+        # same name to the next run.
+        history["models"][name] = {"concept": concept["who"], "region": concept["region"]}
+        history["used_names"].append(name)
+        taken.add(name)
+        save_history(history)
+        _log(f"creating {name} ({concept['region']}) — pool {count + 1}/{target}")
+        create_model(brain_client, ai_client, image_model, name, concept["who"], rng, grok)
+        count += 1
 
-    return cache
-
-
-def _load_cache() -> dict:
-    return json.loads(CACHE.read_text("utf-8")) if CACHE.exists() else {}
-
-
-def _save_cache(cache: dict) -> None:
-    CACHE.write_text(json.dumps(cache, ensure_ascii=False, indent=1), "utf-8")
+    return history
 
 
 def make_ai_client():
@@ -391,14 +694,17 @@ def make_ai_client():
     return OpenAI()
 
 
-def loop(brain_client, ai_client, image_model: str, interval: int, once: bool) -> None:
-    cache = _load_cache()
+def loop(brain_client, ai_client, image_model: str, interval: int, once: bool,
+         rng=random, grok=None) -> None:
+    history = load_history()
     while True:
         try:
-            cache = run_once(brain_client, ai_client, image_model, cache)
-            _save_cache(cache)
-        except Exception as e:
-            print(f"casting worker error: {e}", file=sys.stderr)
+            history = run_once(brain_client, ai_client, image_model, history, rng, grok)
+            save_history(history)
+        except SkipLoop as e:
+            _log(f"server unavailable ({e}) — skipping this round")
+        except Exception as e:  # never crash the worker
+            _log(f"error: {e}")
         if once:
             return
         _sleep(interval)
@@ -413,14 +719,16 @@ def main():
     a = argparse.ArgumentParser(prog="brain-casting-worker")
     a.add_argument("--url", required=True)
     a.add_argument("--token", required=True)
-    a.add_argument("--interval", type=int, default=60)
+    a.add_argument("--interval", type=int, default=90)
     a.add_argument("--once", action="store_true")
     ns = a.parse_args()
 
     brain_client = BrainClient(ns.url, ns.token)
     ai_client = make_ai_client()
+    grok = make_grok_client()
     image_model = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-2")
-    loop(brain_client, ai_client, image_model, ns.interval, ns.once)
+    _log(f"casting worker up — {ns.url} (grok: {'on' if grok else 'off'})")
+    loop(brain_client, ai_client, image_model, ns.interval, ns.once, random, grok)
 
 
 if __name__ == "__main__":

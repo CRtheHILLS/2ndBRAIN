@@ -558,6 +558,23 @@ def process(slug: str, level: str = "일반"):
     return {"concepts": len(d["concepts"]), "page": f"/site/{slug}/index.html", "indexed": n}
 
 
+@app.delete("/books/{slug}", dependencies=[Depends(require_token)])
+def delete_book(slug: str):
+    if slugify(slug) != slug:
+        raise HTTPException(400, "bad slug")
+    data_dir = get_settings().data_dir
+    book = data_dir / "books" / slug
+    if not book.is_dir():
+        raise HTTPException(404, "그런 책이 없어요")
+    shutil.rmtree(book)
+    site = data_dir / "site" / slug
+    if site.is_dir():
+        shutil.rmtree(site)
+    render.render_shelf()
+    index.rebuild()
+    return {"deleted": slug}
+
+
 @app.get("/books")
 def books():
     return store.list_books()

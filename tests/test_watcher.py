@@ -78,3 +78,59 @@ def test_main_requires_token_when_both_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["brain-sync", "--root", str(tmp_path), "--url", "http://x", "--once"])
     with pytest.raises(SystemExit):
         watcher.main()
+
+
+def test_sync_once_skips_non_book_top_level_folders(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "MANIFEST", tmp_path / "m.json")
+    for folder, fname in [("Claire-models2", "x.png"), ("Clair", "y.png"),
+                          ("casting", "z.png"), ("_internal", "w.png")]:
+        d = tmp_path / folder
+        d.mkdir()
+        (d / fname).write_bytes(b"x")
+    book = tmp_path / "양자역학"
+    book.mkdir()
+    (book / "a.txt").write_bytes(b"x")
+
+    f = Fake()
+    assert watcher.sync_once(tmp_path, f) == 1
+    assert f.calls == [("양자역학", "a.txt")]
+
+
+def test_sync_once_honours_custom_excludes(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "MANIFEST", tmp_path / "m.json")
+    for folder in ("사진", "코스모스"):
+        d = tmp_path / folder
+        d.mkdir()
+        (d / "a.txt").write_bytes(b"x")
+    f = Fake()
+    assert watcher.sync_once(tmp_path, f, ["사진"]) == 1
+    assert f.calls == [("코스모스", "a.txt")]
+
+
+def test_excluded_folders_are_skipped_at_any_depth(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "MANIFEST", tmp_path / "m.json")
+    deep = tmp_path / "Claire-models2" / "round1"
+    deep.mkdir(parents=True)
+    (deep / "x.png").write_bytes(b"x")
+    f = Fake()
+    assert watcher.sync_once(tmp_path, f) == 0
+    assert f.calls == []
+
+
+def test_default_excludes_match_the_non_book_folders():
+    assert watcher.DEFAULT_EXCLUDES == ["_*", "Clair*", "casting"]
+    for name in ("_tmp", "Clair", "Claire", "Claire-models2", "casting"):
+        assert watcher.is_excluded(name)
+    for name in ("양자역학", "코스모스", "Cosmos"):
+        assert not watcher.is_excluded(name)
+
+
+def test_main_passes_exclude_flag_through(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "MANIFEST", tmp_path / "m.json")
+    monkeypatch.setattr(sys, "argv", ["brain-sync", "--root", str(tmp_path), "--url", "http://x",
+                                      "--token", "t", "--once", "--exclude", "사진"])
+    captured = {}
+    monkeypatch.setattr(watcher, "sync_once",
+                        lambda root, client, excludes=None: captured.update(excludes=excludes))
+    watcher.main()
+    assert captured["excludes"] == ["사진"]

@@ -1,44 +1,13 @@
 import base64
+import json
+import sys
 from types import SimpleNamespace
 
 import pytest
 from sync import casting_worker as cw
 
 
-class FakeBrainClient:
-    def __init__(self, state, listing):
-        self._state = state
-        self._listing = listing
-        self.uploads = []
-
-    def get_state(self):
-        return self._state
-
-    def get_list(self):
-        return self._listing
-
-    def upload(self, model, filename, data):
-        self.uploads.append((model, filename, data))
-
-
-class FakeImages:
-    def __init__(self):
-        self.calls = []
-        self.fail_first_with = None  # optional exception to raise once
-
-    def generate(self, model, prompt, size, quality):
-        self.calls.append(prompt)
-        if self.fail_first_with is not None and len(self.calls) == 1:
-            exc = self.fail_first_with
-            self.fail_first_with = None
-            raise exc
-        payload = base64.b64encode(b"png-bytes").decode()
-        return SimpleNamespace(data=[SimpleNamespace(b64_json=payload)])
-
-
-class FakeAI:
-    def __init__(self):
-        self.images = FakeImages()
+# --- fakes ------------------------------------------------------------------
 
 
 class StatusError(Exception):
@@ -47,425 +16,584 @@ class StatusError(Exception):
         self.status_code = status_code
 
 
-@pytest.fixture(autouse=True)
-def _no_real_sleep(monkeypatch):
-    monkeypatch.setattr(cw, "_sleep", lambda s: None)
+class FakeBrainClient:
+    def __init__(self, state=None, listing=None):
+        self._state = state or {"paused": False, "picked": [], "target": 1}
+        self._listing = listing or {"models": [], "picked": []}
+        self.uploads = []
+        self.state_error = None
+        self.state_calls = 0
+
+    def get_state(self):
+        self.state_calls += 1
+        if self.state_error is not None:
+            raise self.state_error
+        return self._state
+
+    def get_list(self):
+        return self._listing
+
+    def upload(self, model, filename, data):
+        self.uploads.append((model, filename, data))
+
+    def delete(self, *a, **kw):  # the worker must never call this
+        raise AssertionError("the worker deleted something")
 
 
-@pytest.fixture(autouse=True)
-def _no_xai_key_by_default(monkeypatch):
-    # Keep glam-shot tests hermetic: never let a real environment variable
-    # leak in and change behavior of tests that don't set it themselves.
-    monkeypatch.delenv("XAI_API_KEY", raising=False)
+def _payload(data: bytes):
+    return SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(data).decode())])
 
 
-class FakeXAIResponse:
-    def __init__(self, payload):
+class FakeImages:
+    FACE = b"face-bytes"
+    EDIT = b"openai-edit-bytes"
+
+    def __init__(self):
+        self.generate_calls = []
+        self.edit_calls = []
+        self.fail_next = None
+
+    def _maybe_fail(self):
+        if self.fail_next is not None:
+            exc, self.fail_next = self.fail_next, None
+            raise exc
+
+    def generate(self, model, prompt, size, quality):
+        self.generate_calls.append(
+            {"model": model, "prompt": prompt, "size": size, "quality": quality}
+        )
+        self._maybe_fail()
+        return _payload(self.FACE)
+
+    def edit(self, model, image, prompt, size, quality):
+        self.edit_calls.append(
+            {
+                "model": model,
+                "prompt": prompt,
+                "image": image.read(),
+                "name": getattr(image, "name", None),
+                "size": size,
+                "quality": quality,
+            }
+        )
+        self._maybe_fail()
+        return _payload(self.EDIT)
+
+
+class FakeAI:
+    def __init__(self):
+        self.images = FakeImages()
+
+
+class Rng:
+    """Deterministic stand-in for `random`: always the same slot of a pool."""
+
+    def __init__(self, pick=0):
+        self.pick = pick
+
+    def choice(self, pool):
+        pool = list(pool)
+        return pool[self.pick]
+
+
+class FakeResponse:
+    def __init__(self, payload, status=200):
         self._payload = payload
+        self.status_code = status
 
     def raise_for_status(self):
-        pass
+        if self.status_code >= 400:
+            raise StatusError(self.status_code)
 
     def json(self):
         return self._payload
 
 
-def _fake_xai_post(calls, image_bytes=b"glam-bytes"):
-    def fake_post(url, headers=None, json=None, timeout=None):
-        calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
-        payload = base64.b64encode(image_bytes).decode()
-        return FakeXAIResponse({"data": [{"b64_json": payload}]})
+GROK_BYTES = b"grok-edit-bytes"
 
-    return fake_post
+
+def fake_poster(calls, status=200):
+    def post(url, headers=None, json=None, timeout=None):
+        calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        if status >= 400:
+            return FakeResponse({}, status)
+        return FakeResponse({"data": [{"b64_json": base64.b64encode(GROK_BYTES).decode()}]})
+
+    return post
+
+
+def make_grok(calls, status=200):
+    return cw.GrokClient("xai-test-key", fake_poster(calls, status))
+
+
+# --- fixtures ---------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def slept(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(cw, "_sleep", lambda s: recorded.append(s))
+    return recorded
+
+
+@pytest.fixture(autouse=True)
+def history_file(tmp_path, monkeypatch):
+    p = tmp_path / "brain-casting.json"
+    monkeypatch.setattr(cw, "HISTORY", p)
+    return p
+
+
+@pytest.fixture(autouse=True)
+def _no_xai_key(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+
+
+def fresh_history():
+    return cw._empty_history()
+
+
+# --- 1. pool size -----------------------------------------------------------
+
+
+def _model(name, files=("f.png",)):
+    return {"name": name, "files": list(files)}
+
+
+def test_run_once_does_nothing_when_pool_is_full():
+    listing = {"models": [_model(f"Claire M{i}") for i in range(10)], "picked": []}
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 10}, listing)
+    ai = FakeAI()
+    cw.run_once(client, ai, "gpt-image-2", fresh_history(), Rng())
+    assert client.uploads == []
+    assert ai.images.generate_calls == [] and ai.images.edit_calls == []
+
+
+def test_run_once_creates_exactly_one_model_when_one_short():
+    listing = {"models": [_model("Claire A"), _model("Claire B")], "picked": []}
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 3}, listing)
+    ai = FakeAI()
+    cw.run_once(client, ai, "gpt-image-2", fresh_history(), Rng())
+    names = {n for (n, _, _) in client.uploads}
+    assert len(names) == 1
+    assert len(client.uploads) == 3
+
+
+def test_run_once_repeats_within_one_run_until_target():
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 3},
+                             {"models": [], "picked": []})
+    ai = FakeAI()
+    history = fresh_history()
+    cw.run_once(client, ai, "gpt-image-2", history, Rng())
+    names = {n for (n, _, _) in client.uploads}
+    assert len(names) == 3
+    assert len(client.uploads) == 9
+    assert len(history["models"]) == 3
 
 
 def test_run_once_skips_when_paused():
-    client = FakeBrainClient({"paused": True, "picked": [], "target": 10}, {"models": [], "picked": []})
+    client = FakeBrainClient({"paused": True, "picked": [], "target": 10},
+                             {"models": [], "picked": []})
     ai = FakeAI()
-    cache = cw.run_once(client, ai, "gpt-image-2", {})
+    cw.run_once(client, ai, "gpt-image-2", fresh_history(), Rng())
     assert client.uploads == []
-    assert ai.images.calls == []
-    assert cache == {}
+    assert ai.images.generate_calls == []
 
 
-def test_run_once_creates_new_model_when_active_under_target(monkeypatch):
-    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
-    client = FakeBrainClient({"paused": False, "picked": [], "target": 1}, {"models": [], "picked": []})
+def test_picked_models_do_not_count_towards_the_pool():
+    listing = {"models": [], "picked": [_model("Claire Kim")]}
+    client = FakeBrainClient({"paused": False, "picked": ["Claire Kim"], "target": 1}, listing)
     ai = FakeAI()
-    cache = cw.run_once(client, ai, "gpt-image-2", {})
-
-    assert len(client.uploads) == 3
-    filenames = sorted(f for (_, f, _) in client.uploads)
-    assert filenames == ["back.png", "face.png", "torso.png"]
-    names = {name for (name, _, _) in client.uploads}
-    assert len(names) == 1
-    name = names.pop()
-    assert name.startswith("Claire ")
-    assert cache[name] == cw.CONCEPTS[0]
-    for (_, _, data) in client.uploads:
-        assert data == b"png-bytes"
+    cw.run_once(client, ai, "gpt-image-2", fresh_history(), Rng())
+    names = {n for (n, _, _) in client.uploads}
+    assert len(names) == 1 and "Claire Kim" not in names
 
 
-def test_run_once_fills_missing_shot_using_cached_description():
-    client = FakeBrainClient(
-        {"paused": False, "picked": [], "target": 1},
-        {"models": [{"name": "Claire Larsen", "files": ["face.png", "torso.png"]}], "picked": []},
-    )
+def test_worker_never_deletes():
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 2},
+                             {"models": [], "picked": []})
     ai = FakeAI()
-    cache = {"Claire Larsen": cw.CONCEPTS[4]}
-    cw.run_once(client, ai, "gpt-image-2", cache)
-    assert client.uploads == [("Claire Larsen", "back.png", b"png-bytes")]
+    cw.run_once(client, ai, "gpt-image-2", fresh_history(), Rng())  # FakeBrainClient.delete raises
+    assert len(client.uploads) == 6
 
 
-def test_run_once_skips_fill_when_no_cached_description():
-    client = FakeBrainClient(
-        {"paused": False, "picked": [], "target": 1},
-        {"models": [{"name": "Uploaded Manually", "files": ["face.png"]}], "picked": []},
-    )
-    ai = FakeAI()
-    cw.run_once(client, ai, "gpt-image-2", {})
-    assert client.uploads == []
+# --- 2. reference chain -----------------------------------------------------
 
 
-def test_run_once_ignores_picked_models_for_target_math():
-    client = FakeBrainClient(
-        {"paused": False, "picked": ["Claire Kim"], "target": 1},
-        {"models": [], "picked": [{"name": "Claire Kim", "files": ["face.png", "torso.png", "back.png"]}]},
-    )
-    ai = FakeAI()
-    cache = {}
-    cw.run_once(client, ai, "gpt-image-2", cache)
-    # active (non-picked) count is 0 < target 1, so a new model must be created
-    assert len(client.uploads) == 3
-    names = {name for (name, _, _) in client.uploads}
-    assert "Claire Kim" not in names
+def _run_one(rng=None, grok=None, ai=None, client=None):
+    client = client or FakeBrainClient({"paused": False, "picked": [], "target": 1},
+                                       {"models": [], "picked": []})
+    ai = ai or FakeAI()
+    history = fresh_history()
+    cw.run_once(client, ai, "gpt-image-2", history, rng or Rng(), grok)
+    return client, ai, history
 
 
-def test_brain_client_upload_sends_token_header(monkeypatch):
-    captured = {}
-
-    def fake_post(url, headers=None, data=None, files=None, timeout=None):
-        captured["url"] = url
-        captured["headers"] = headers
-        captured["data"] = data
-        captured["files"] = files
-
-        class R:
-            def raise_for_status(self):
-                pass
-
-        return R()
-
-    monkeypatch.setattr(cw.httpx, "post", fake_post)
-    client = cw.BrainClient("http://x/", "tok123")
-    client.upload("Claire Larsen", "face.png", b"bytes")
-
-    assert captured["url"] == "http://x/casting/upload"
-    assert captured["headers"]["X-Brain-Token"] == "tok123"
-    assert captured["data"] == {"model": "Claire Larsen"}
-    assert captured["files"]["file"][0] == "face.png"
+def test_face_is_generated_from_the_concept_text():
+    client, ai, history = _run_one()
+    assert len(ai.images.generate_calls) == 1
+    call = ai.images.generate_calls[0]
+    assert call["size"] == "1024x1536" and call["quality"] == "medium"
+    who = list(history["models"].values())[0]["concept"]
+    assert who in call["prompt"]
+    assert cw.FACE_SHOT in call["prompt"]
+    # the face is uploaded first, before any edit
+    assert client.uploads[0][1].endswith("_face.png")
 
 
-def test_build_prompt_face_matches_spec():
-    prompt = cw.build_prompt("a test woman", "face")
-    assert prompt == (
+def test_both_edits_use_the_face_image_as_reference():
+    calls = []
+    client, ai, _ = _run_one(grok=make_grok(calls))
+    assert len(ai.images.edit_calls) == 1
+    assert ai.images.edit_calls[0]["image"] == FakeImages.FACE
+    assert len(calls) == 1
+    data_url = calls[0]["json"]["image"]["url"]
+    assert data_url.startswith("data:image/png;base64,")
+    assert base64.b64decode(data_url.split(",", 1)[1]) == FakeImages.FACE
+
+
+def test_openai_edit_reference_is_a_named_png_file():
+    _, ai, _ = _run_one()
+    assert all(c["name"] == "face.png" for c in ai.images.edit_calls)
+    assert all(c["size"] == "1024x1536" and c["quality"] == "medium" for c in ai.images.edit_calls)
+
+
+def test_grok_takes_torso_and_openai_takes_back_when_rng_picks_first():
+    calls = []
+    client, ai, _ = _run_one(rng=Rng(0), grok=make_grok(calls))
+    by_file = {f: d for (_, f, d) in client.uploads}
+    torso = [f for f in by_file if f.endswith("_torso.png")][0]
+    back = [f for f in by_file if f.endswith("_back.png")][0]
+    assert by_file[torso] == GROK_BYTES
+    assert by_file[back] == FakeImages.EDIT
+
+
+def test_grok_takes_back_and_openai_takes_torso_when_rng_picks_last():
+    calls = []
+    client, ai, _ = _run_one(rng=Rng(-1), grok=make_grok(calls))
+    by_file = {f: d for (_, f, d) in client.uploads}
+    torso = [f for f in by_file if f.endswith("_torso.png")][0]
+    back = [f for f in by_file if f.endswith("_back.png")][0]
+    assert by_file[back] == GROK_BYTES
+    assert by_file[torso] == FakeImages.EDIT
+
+
+def test_without_grok_both_edits_go_to_openai():
+    calls = []
+    client, ai, _ = _run_one(grok=None)
+    assert len(ai.images.edit_calls) == 2
+    assert calls == []
+    assert all(d in (FakeImages.FACE, FakeImages.EDIT) for (_, _, d) in client.uploads)
+
+
+def test_make_grok_client_is_none_without_key(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    assert cw.make_grok_client() is None
+
+
+def test_make_grok_client_uses_env_key(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-abc")
+    grok = cw.make_grok_client(poster=lambda *a, **k: None)
+    assert isinstance(grok, cw.GrokClient) and grok.api_key == "xai-abc"
+
+
+def test_every_edit_prompt_starts_with_the_reference_sentence():
+    calls = []
+    client, ai, _ = _run_one(grok=make_grok(calls))
+    assert ai.images.edit_calls[0]["prompt"].startswith(cw.REFERENCE_PREFIX)
+    assert calls[0]["json"]["prompt"].startswith(cw.REFERENCE_PREFIX)
+
+
+def test_uploaded_filenames_are_underscored_model_plus_shot():
+    client, _, history = _run_one()
+    name = list(history["models"])[0]
+    stem = name.replace(" ", "_")
+    files = sorted(f for (_, f, _) in client.uploads)
+    assert files == [f"{stem}_back.png", f"{stem}_face.png", f"{stem}_torso.png"]
+    assert all(m == name for (m, _, _) in client.uploads)
+
+
+def test_grok_edit_payload_shape():
+    calls = []
+    grok = make_grok(calls)
+    out = grok.edit(b"ref", "a prompt")
+    assert out == GROK_BYTES
+    call = calls[0]
+    assert call["url"] == "https://api.x.ai/v1/images/edits"
+    assert call["headers"]["Authorization"] == "Bearer xai-test-key"
+    body = call["json"]
+    assert body["model"] == "grok-imagine-image"
+    assert body["response_format"] == "b64_json"
+    assert body["image"] == {"url": "data:image/png;base64," + base64.b64encode(b"ref").decode()}
+    assert body["prompt"] == "a prompt"
+
+
+def test_sleeps_twelve_after_openai_and_four_after_grok(slept):
+    calls = []
+    _run_one(grok=make_grok(calls))
+    assert slept.count(12) == 2  # face generate + one openai edit
+    assert slept.count(4) == 1
+
+
+# --- 3. prompts -------------------------------------------------------------
+
+
+def test_face_prompt_matches_spec():
+    assert cw.build_face_prompt("a test woman") == (
         "Photorealistic professional model photography, Vogue editorial level. "
-        "Subject: a test woman, 173cm, slender long-legged model proportions. "
+        "Subject: a test woman, 173cm, slender long legs, softly curved feminine "
+        "figure, graceful glamorous silhouette. "
         "Extreme close-up beauty portrait, face filling the frame, flawless "
         "natural skin texture, soft studio light, direct eye contact, gentle "
         "confident expression. Fully clothed, tasteful."
     )
 
 
-def test_build_prompt_torso_picks_outfit_from_list(monkeypatch):
-    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
-    hard = cw.build_prompt("a test woman", "torso", soft=False)
-    assert any(outfit in hard for outfit in cw.OUTFITS_TORSO)
-    assert any(scene in hard for scene in cw.SCENES)
+def test_soft_prompt_drops_the_figure_phrase():
+    soft = cw.build_prompt("a test woman", "Some shot.", soft=True)
+    assert "softly curved feminine figure" not in soft
+    assert "graceful glamorous silhouette" not in soft
+    assert "173cm" in soft
 
 
-def test_build_prompt_torso_soft_uses_generic_dress_phrase():
-    soft = cw.build_prompt("a test woman", "torso", soft=True)
-    assert cw.SOFT_OUTFIT_TORSO in soft
-    assert all(outfit not in soft for outfit in cw.OUTFITS_TORSO)
+def test_openai_shot_texts_use_an_outfit_and_a_scene():
+    rng = Rng()
+    torso = cw.openai_shot_text(rng, "torso")
+    back = cw.openai_shot_text(rng, "back")
+    assert any(o in torso for o in cw.OUTFITS_TORSO)
+    assert any(o in back for o in cw.OUTFITS_BACK)
+    assert any(s in torso for s in cw.SCENES) and any(s in back for s in cw.SCENES)
+    assert "facing the camera" in torso and "from behind" in back
 
 
-def test_build_prompt_back_picks_outfit_from_list(monkeypatch):
-    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
-    hard = cw.build_prompt("a test woman", "back", soft=False)
-    assert any(outfit in hard for outfit in cw.OUTFITS_BACK)
-    assert any(scene in hard for scene in cw.SCENES)
+def test_openai_soft_shot_texts_use_plain_outfit_wording():
+    rng = Rng()
+    torso = cw.openai_shot_text(rng, "torso", soft=True)
+    back = cw.openai_shot_text(rng, "back", soft=True)
+    assert cw.SOFT_OUTFIT_TORSO in torso and cw.SOFT_OUTFIT_BACK in back
 
 
-def test_build_prompt_back_soft_uses_generic_gown_phrase():
-    soft = cw.build_prompt("a test woman", "back", soft=True)
-    assert cw.SOFT_OUTFIT_BACK in soft
-    assert all(outfit not in soft for outfit in cw.OUTFITS_BACK)
+def test_grok_shot_text_is_a_glam_register_ending_with_the_safety_line():
+    rng = Rng()
+    text = cw.grok_shot_text(rng, "torso")
+    assert cw.POSES[0] in text
+    assert cw.GLAM_REGISTERS[0] in text
+    assert text.endswith("Editorial, tasteful, no lingerie, no nudity.")
 
 
-def test_outfit_and_scene_lists_meet_minimum_size_with_no_forbidden_items():
-    assert len(cw.OUTFITS_TORSO) >= 6
-    assert len(cw.OUTFITS_BACK) >= 5
-    forbidden = ("school", "uniform", "lingerie")
-    for outfit in cw.OUTFITS_TORSO + cw.OUTFITS_BACK:
-        lowered = outfit.lower()
-        assert not any(word in lowered for word in forbidden)
-    for register in cw.GLAM_REGISTERS:
-        lowered = register.lower()
-        assert not any(word in lowered for word in forbidden)
+def test_at_least_eight_distinct_poses_and_seven_registers():
+    assert len(cw.POSES) >= 8 and len(set(cw.POSES)) == len(cw.POSES)
+    assert len(cw.GLAM_REGISTERS) >= 7
 
 
-def test_generate_shot_retries_with_soft_prompt_on_400(monkeypatch):
-    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
+def test_no_school_uniforms_or_lingerie_anywhere():
+    forbidden = ("school", "uniform", "lingerie", "nude")
+    texts = cw.OUTFITS_TORSO + cw.OUTFITS_BACK + cw.GLAM_REGISTERS + cw.POSES + cw.SCENES
+    for t in texts:
+        assert not any(w in t.lower() for w in forbidden), t
+
+
+# --- 4. concepts and names --------------------------------------------------
+
+
+ALLOWED_GROUPS = ("American", "Spanish", "Argentinian", "Russian", "French",
+                  "Italian", "Scandinavian", "Czech", "Polish", "Korean", "Japanese")
+
+
+def test_concepts_cover_only_the_allowed_groups():
+    for c in cw.CONCEPTS:
+        # every concept reads "tall <Group> woman, ..."
+        group = c["who"].split()[1]
+        assert group in ALLOWED_GROUPS, c["who"]
+        assert c["region"] in cw.SURNAMES
+    assert {c["who"].split()[1] for c in cw.CONCEPTS} == set(ALLOWED_GROUPS)
+
+
+def test_korean_and_japanese_concepts_read_as_top_tier_beauty():
+    korean = [c["who"] for c in cw.CONCEPTS if c["region"] == "korean"][0]
+    japanese = [c["who"] for c in cw.CONCEPTS if c["region"] == "japanese"][0]
+    assert "actress-level beauty" in korean and "V-line" in korean
+    assert "Tokyo model-level beauty" in japanese
+    for who in (korean, japanese):
+        assert len(who) > 120  # a full English description, not a stub
+
+
+def test_weighted_rotation_repeats_the_heavier_concepts():
+    history = cw._empty_history()
+    seen = [cw.next_concept(history)["region"] for _ in range(len(cw.ROTATION))]
+    assert len(cw.ROTATION) > len(cw.CONCEPTS)  # weights actually expand the cycle
+    assert seen.count("korean") == 2 and seen.count("japanese") == 2
+    assert seen.count("anglo") == 4
+    # wraps around
+    assert cw.next_concept(history)["region"] == seen[0]
+
+
+def test_surname_pool_has_at_least_300_unique_ascii_names():
+    assert len(cw.ALL_SURNAMES) >= 300
+    assert len(set(cw.ALL_SURNAMES)) == len(cw.ALL_SURNAMES)
+    assert all(s.isascii() and s.isalpha() for s in cw.ALL_SURNAMES)
+
+
+def test_surnames_are_grouped_by_region():
+    assert {"Kim", "Lee", "Park", "Choi", "Jung", "Kang", "Yoon", "Han", "Seo",
+            "Shin", "Song", "Lim"} <= set(cw.SURNAMES["korean"])
+    assert {"Sato", "Suzuki", "Takahashi", "Tanaka", "Watanabe"} <= set(cw.SURNAMES["japanese"])
+
+
+def test_new_name_matches_the_concept_region():
+    for concept in cw.CONCEPTS:
+        name = cw.new_model_name(concept["region"], set(), Rng())
+        assert name.startswith("Claire ")
+        assert name.split(" ", 1)[1] in cw.SURNAMES[concept["region"]]
+
+
+def test_new_name_avoids_server_and_history_names():
+    region = "korean"
+    taken = {f"Claire {s}" for s in cw.SURNAMES[region][:-1]}
+    assert cw.new_model_name(region, taken, Rng()) == f"Claire {cw.SURNAMES[region][-1]}"
+
+
+def test_run_once_never_reuses_a_server_or_history_name():
+    listing = {"models": [_model("Claire Kim")], "picked": [_model("Claire Lee")]}
+    client = FakeBrainClient({"paused": False, "picked": ["Claire Lee"], "target": 2}, listing)
     ai = FakeAI()
-    ai.images.fail_first_with = StatusError(400)
-    data = cw.generate_shot(ai, "a test woman", "torso", "gpt-image-2")
-    assert data == b"png-bytes"
-    assert len(ai.images.calls) == 2
-    assert any(outfit in ai.images.calls[0] for outfit in cw.OUTFITS_TORSO)
-    assert cw.SOFT_OUTFIT_TORSO in ai.images.calls[1]
+    history = fresh_history()
+    history["used_names"].append("Claire Park")
+    # force the korean concept so the collision candidates are in the same pool
+    history["concept_idx"] = cw.ROTATION.index(
+        [i for i, c in enumerate(cw.CONCEPTS) if c["region"] == "korean"][0]
+    )
+    cw.run_once(client, ai, "gpt-image-2", history, Rng())
+    created = {n for (n, _, _) in client.uploads}
+    assert created.isdisjoint({"Claire Kim", "Claire Lee", "Claire Park"})
 
 
-def test_generate_shot_retries_after_sleep_on_429(monkeypatch):
-    slept = []
-    monkeypatch.setattr(cw, "_sleep", lambda s: slept.append(s))
+def test_history_records_concept_region_and_used_name(history_file):
+    client, _, history = _run_one()
+    name = list(history["models"])[0]
+    entry = history["models"][name]
+    assert entry["concept"] in [c["who"] for c in cw.CONCEPTS]
+    assert entry["region"] in cw.SURNAMES
+    assert name in history["used_names"]
+    # written to disk before generation, so a crash can't recycle the name
+    assert name in json.loads(history_file.read_text("utf-8"))["models"]
+
+
+def test_history_migrates_the_legacy_flat_cache(history_file):
+    history_file.write_text(
+        json.dumps({"Claire Larsen": "tall Russian woman...", "_concept_idx": 3}), "utf-8"
+    )
+    history = cw.load_history()
+    assert history["models"]["Claire Larsen"]["concept"] == "tall Russian woman..."
+    assert history["used_names"] == ["Claire Larsen"]
+    assert history["concept_idx"] == 3
+
+
+# --- 5. robustness ----------------------------------------------------------
+
+
+def test_moderation_400_retries_once_with_the_soft_text():
     ai = FakeAI()
-    ai.images.fail_first_with = StatusError(429)
-    data = cw.generate_shot(ai, "a test woman", "face", "gpt-image-2")
-    assert data == b"png-bytes"
-    assert len(ai.images.calls) == 2
-    assert slept == [20]
+    ai.images.fail_next = StatusError(400)
+    client, ai, _ = _run_one(ai=ai)
+    prompts = [c["prompt"] for c in ai.images.generate_calls]
+    assert len(prompts) == 2
+    assert "softly curved feminine figure" in prompts[0]
+    assert "softly curved feminine figure" not in prompts[1]
 
 
-def test_generate_shot_reraises_other_errors():
+def test_moderation_400_on_an_edit_retries_with_plain_outfit_wording():
     ai = FakeAI()
-    ai.images.fail_first_with = StatusError(500)
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 1},
+                             {"models": [], "picked": []})
+    history = fresh_history()
+    # let the face succeed, then trip the first edit
+    orig_edit = ai.images.edit
+
+    def edit(**kw):
+        if not ai.images.edit_calls:
+            ai.images.fail_next = StatusError(400)
+        return orig_edit(**kw)
+
+    ai.images.edit = edit
+    cw.run_once(client, ai, "gpt-image-2", history, Rng())
+    prompts = [c["prompt"] for c in ai.images.edit_calls]
+    assert len(prompts) == 3  # first attempt + soft retry + the other edit
+    assert cw.SOFT_OUTFIT_TORSO in prompts[1] or cw.SOFT_OUTFIT_BACK in prompts[1]
+
+
+def test_rate_limit_429_sleeps_twenty_then_retries(slept):
+    ai = FakeAI()
+    ai.images.fail_next = StatusError(429)
+    cw.generate_face(ai, "gpt-image-2", "a test woman")
+    assert len(ai.images.generate_calls) == 2
+    assert 20 in slept
+
+
+def test_other_generation_errors_propagate():
+    ai = FakeAI()
+    ai.images.fail_next = StatusError(418)
     with pytest.raises(StatusError):
-        cw.generate_shot(ai, "a test woman", "face", "gpt-image-2")
+        cw.generate_face(ai, "gpt-image-2", "a test woman")
 
 
-def test_new_model_name_avoids_existing_names(monkeypatch):
-    existing = {f"Claire {s}" for s in cw.SURNAME_POOL[:-1]}
-    name = cw._new_model_name(existing)
-    assert name == f"Claire {cw.SURNAME_POOL[-1]}"
-
-
-def test_concept_rotation_cycles_through_all_concepts():
-    cache = {}
-    seen = [cw._next_concept(cache) for _ in range(len(cw.CONCEPTS))]
-    assert seen == cw.CONCEPTS
-    # wraps back around
-    assert cw._next_concept(cache) == cw.CONCEPTS[0]
-    # the rotation counter must never be treated as a cached model description
-    assert "_concept_idx" in cache
-
-
-# --- Grok glamour slot -------------------------------------------------
-
-
-def test_poses_list_has_at_least_eight_distinct_entries():
-    assert len(cw.POSES) >= 8
-    assert len(set(cw.POSES)) == len(cw.POSES)
-
-
-def test_glam_views_are_front_and_back():
-    assert set(cw.GLAM_VIEWS) == {"front", "back"}
-
-
-def test_build_glam_prompt_contains_identity_pose_register_and_safety():
-    prompt = cw.build_glam_prompt(
-        "a test woman", "front", cw.POSES[2], cw.GLAM_REGISTERS[1]
-    )
-    assert "Subject: a test woman, 173cm, slender long-legged model proportions." in prompt
-    assert cw.POSES[2] in prompt
-    assert cw.GLAM_REGISTERS[1] in prompt
-    assert prompt.endswith(cw.GLAM_SAFETY)
-
-
-def test_generate_glam_shot_returns_none_when_key_missing(monkeypatch):
-    calls = []
-    monkeypatch.setattr(cw.httpx, "post", _fake_xai_post(calls))
-    result = cw.generate_glam_shot("a test woman")
-    assert result is None
-    assert calls == []
-
-
-def test_generate_glam_shot_calls_xai_with_expected_payload(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
-    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
-    calls = []
-    monkeypatch.setattr(cw.httpx, "post", _fake_xai_post(calls))
-
-    data = cw.generate_glam_shot("a test woman")
-
-    assert data == b"glam-bytes"
-    assert len(calls) == 1
-    call = calls[0]
-    assert call["url"] == cw.XAI_IMAGE_URL
-    assert call["headers"]["Authorization"] == "Bearer xai-test-key"
-    assert call["json"]["model"] == "grok-imagine-image-quality"
-    assert call["json"]["n"] == 1
-    assert call["json"]["response_format"] == "b64_json"
-    prompt = call["json"]["prompt"]
-    assert cw.POSES[0] in prompt
-    assert cw.GLAM_REGISTERS[0] in prompt
-    assert prompt.endswith(cw.GLAM_SAFETY)
-
-
-def test_run_once_generates_glam_for_new_model_when_xai_key_set(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
-    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
-    calls = []
-    monkeypatch.setattr(cw.httpx, "post", _fake_xai_post(calls))
-
-    client = FakeBrainClient(
-        {"paused": False, "picked": [], "target": 1}, {"models": [], "picked": []}
-    )
+def test_server_5xx_retries_three_times_with_backoff_then_skips(slept):
+    client = FakeBrainClient()
+    client.state_error = StatusError(503)
     ai = FakeAI()
-    cache = cw.run_once(client, ai, "gpt-image-2", {})
-
-    glam_uploads = [u for u in client.uploads if u[1].endswith("_glam.png")]
-    assert len(glam_uploads) == 1
-    name, filename, data = glam_uploads[0]
-    assert name.startswith("Claire ")
-    assert filename == f"{name}_glam.png"
-    assert data == b"glam-bytes"
-    assert cache[name] == cw.CONCEPTS[0]
-    # face/torso/back + glam = 4 uploads total
-    assert len(client.uploads) == 4
+    with pytest.raises(cw.SkipLoop):
+        cw.run_once(client, ai, "gpt-image-2", fresh_history(), Rng())
+    assert client.state_calls == 4
+    assert slept == [2, 5, 10]
 
 
-def test_run_once_skips_glam_when_xai_key_missing(monkeypatch):
-    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
-    post_calls = []
-    monkeypatch.setattr(cw.httpx, "post", _fake_xai_post(post_calls))
-
-    client = FakeBrainClient(
-        {"paused": False, "picked": [], "target": 1}, {"models": [], "picked": []}
-    )
+def test_connection_errors_are_retried_too(slept):
+    client = FakeBrainClient()
+    client.state_error = ConnectionError("refused")
     ai = FakeAI()
-    cw.run_once(client, ai, "gpt-image-2", {})
+    with pytest.raises(cw.SkipLoop):
+        cw.run_once(client, ai, "gpt-image-2", fresh_history(), Rng())
+    assert client.state_calls == 4
 
-    assert post_calls == []
+
+def test_client_errors_from_the_server_are_not_retried():
+    client = FakeBrainClient()
+    client.state_error = StatusError(401)
+    ai = FakeAI()
+    with pytest.raises(StatusError):
+        cw.run_once(client, ai, "gpt-image-2", fresh_history(), Rng())
+    assert client.state_calls == 1
+
+
+def test_loop_skips_the_round_instead_of_crashing(history_file):
+    client = FakeBrainClient()
+    client.state_error = StatusError(500)
+    ai = FakeAI()
+    cw.loop(client, ai, "gpt-image-2", 90, once=True, rng=Rng())  # must not raise
+    assert client.uploads == []
+
+
+def test_loop_runs_a_single_pass_with_once(history_file):
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 1},
+                             {"models": [], "picked": []})
+    ai = FakeAI()
+    cw.loop(client, ai, "gpt-image-2", 90, once=True, rng=Rng())
     assert len(client.uploads) == 3
-    assert all(not f.endswith("_glam.png") for (_, f, _) in client.uploads)
+    assert json.loads(history_file.read_text("utf-8"))["models"]
 
 
-def test_run_once_fills_glam_for_existing_active_model_missing_it(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
-    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
-    calls = []
-    monkeypatch.setattr(cw.httpx, "post", _fake_xai_post(calls))
-
-    client = FakeBrainClient(
-        {"paused": False, "picked": [], "target": 1},
-        {
-            "models": [
-                {"name": "Claire Larsen", "files": ["face.png", "torso.png", "back.png"]}
-            ],
-            "picked": [],
-        },
-    )
-    ai = FakeAI()
-    cache = {"Claire Larsen": cw.CONCEPTS[4]}
-    cw.run_once(client, ai, "gpt-image-2", cache)
-
-    assert client.uploads == [("Claire Larsen", "Claire Larsen_glam.png", b"glam-bytes")]
-    assert len(calls) == 1
-    assert "a test woman" not in calls[0]["json"]["prompt"]  # uses the cached concept, not a stub
+# --- 6. CLI -----------------------------------------------------------------
 
 
-def test_run_once_skips_glam_for_active_model_that_already_has_it(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
-    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
-    calls = []
-    monkeypatch.setattr(cw.httpx, "post", _fake_xai_post(calls))
+def test_main_wires_cli_flags_with_interval_default_90(monkeypatch, history_file):
+    monkeypatch.setattr(sys, "argv", ["brain-casting-worker", "--url", "http://x", "--token", "t"])
+    monkeypatch.setattr(cw, "make_ai_client", lambda: FakeAI())
+    captured = {}
 
-    client = FakeBrainClient(
-        {"paused": False, "picked": [], "target": 1},
-        {
-            "models": [
-                {
-                    "name": "Claire Larsen",
-                    "files": [
-                        "face.png",
-                        "torso.png",
-                        "back.png",
-                        "Claire Larsen_glam.png",
-                    ],
-                }
-            ],
-            "picked": [],
-        },
-    )
-    ai = FakeAI()
-    cache = {"Claire Larsen": cw.CONCEPTS[4]}
-    cw.run_once(client, ai, "gpt-image-2", cache)
+    def fake_loop(brain_client, ai_client, image_model, interval, once, rng=None, grok=None):
+        captured.update({"url": brain_client.url, "token": brain_client.token,
+                         "interval": interval, "once": once, "grok": grok})
 
-    assert client.uploads == []
-    assert calls == []
-
-
-def test_run_once_skips_glam_for_active_model_without_cached_description(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
-    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
-    calls = []
-    monkeypatch.setattr(cw.httpx, "post", _fake_xai_post(calls))
-
-    client = FakeBrainClient(
-        {"paused": False, "picked": [], "target": 1},
-        {
-            "models": [{"name": "Uploaded Manually", "files": ["face.png"]}],
-            "picked": [],
-        },
-    )
-    ai = FakeAI()
-    cw.run_once(client, ai, "gpt-image-2", {})
-
-    assert client.uploads == []
-    assert calls == []
-
-
-def test_glam_upload_sleeps_four_seconds(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
-    monkeypatch.setattr(cw.random, "choice", lambda pool: pool[0])
-    monkeypatch.setattr(cw.httpx, "post", _fake_xai_post([]))
-    slept = []
-    monkeypatch.setattr(cw, "_sleep", lambda s: slept.append(s))
-
-    client = FakeBrainClient(
-        {"paused": False, "picked": [], "target": 1},
-        {
-            "models": [
-                {"name": "Claire Larsen", "files": ["face.png", "torso.png", "back.png"]}
-            ],
-            "picked": [],
-        },
-    )
-    ai = FakeAI()
-    cache = {"Claire Larsen": cw.CONCEPTS[4]}
-    cw.run_once(client, ai, "gpt-image-2", cache)
-
-    assert 4 in slept
-
-
-def test_run_once_skips_glam_when_paused(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
-    calls = []
-    monkeypatch.setattr(cw.httpx, "post", _fake_xai_post(calls))
-
-    client = FakeBrainClient(
-        {"paused": True, "picked": [], "target": 10},
-        {
-            "models": [
-                {"name": "Claire Larsen", "files": ["face.png", "torso.png", "back.png"]}
-            ],
-            "picked": [],
-        },
-    )
-    ai = FakeAI()
-    cache = {"Claire Larsen": cw.CONCEPTS[4]}
-    cw.run_once(client, ai, "gpt-image-2", cache)
-
-    assert client.uploads == []
-    assert calls == []
+    monkeypatch.setattr(cw, "loop", fake_loop)
+    cw.main()
+    assert captured == {"url": "http://x", "token": "t", "interval": 90,
+                        "once": False, "grok": None}

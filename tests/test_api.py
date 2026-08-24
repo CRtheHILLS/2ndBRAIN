@@ -355,3 +355,47 @@ def test_debug_fs_returns_tree_with_token(data_dir):
         # size should only be present for files
         if not entry["dir"]:
             assert "size" in entry
+
+
+def test_delete_book_requires_token(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        c.post("/upload", headers={"X-Brain-Token": "test-token"},
+               data={"book": "코스모스"}, files={"file": ("a.txt", "우주".encode())})
+        r = c.delete("/books/코스모스")
+    assert r.status_code == 401
+    assert (data_dir / "books" / "코스모스").is_dir()
+
+
+def test_delete_book_404_when_missing(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        r = c.delete("/books/없는책", headers={"X-Brain-Token": "test-token"})
+    assert r.status_code == 404
+
+
+def test_delete_book_rejects_invalid_slug(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        r = c.delete("/books/코스모스 X", headers={"X-Brain-Token": "test-token"})
+    assert r.status_code in (400, 404)
+
+
+def test_delete_book_removes_files_and_shelf_entry(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        c.post("/upload", headers={"X-Brain-Token": "test-token"},
+               data={"book": "코스모스"}, files={"file": ("a.txt", "우주".encode())})
+        c.post("/upload", headers={"X-Brain-Token": "test-token"},
+               data={"book": "양자역학"}, files={"file": ("b.txt", "파동".encode())})
+        (data_dir / "site" / "코스모스").mkdir(parents=True, exist_ok=True)
+        (data_dir / "site" / "코스모스" / "index.html").write_text("x", "utf-8")
+
+        r = c.delete("/books/코스모스", headers={"X-Brain-Token": "test-token"})
+        assert r.status_code == 200 and r.json() == {"deleted": "코스모스"}
+        assert not (data_dir / "books" / "코스모스").exists()
+        assert not (data_dir / "site" / "코스모스").exists()
+        assert [b["slug"] for b in c.get("/books").json()] == ["양자역학"]
+
+    shelf = (data_dir / "site" / "index.html").read_text("utf-8")
+    assert "코스모스" not in shelf and "양자역학" in shelf
