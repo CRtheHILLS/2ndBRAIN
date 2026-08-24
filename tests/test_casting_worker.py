@@ -144,6 +144,13 @@ def history_file(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def face_dir(tmp_path, monkeypatch):
+    d = tmp_path / "faces"
+    monkeypatch.setattr(cw, "FACE_DIR", d)
+    return d
+
+
+@pytest.fixture(autouse=True)
 def _no_xai_key(monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
 
@@ -597,3 +604,117 @@ def test_main_wires_cli_flags_with_interval_default_90(monkeypatch, history_file
     cw.main()
     assert captured == {"url": "http://x", "token": "t", "interval": 90,
                         "once": False, "grok": None}
+
+
+# --- 7. backfill of half-built models --------------------------------------
+
+
+def _history_with(name, region="korean"):
+    history = fresh_history()
+    who = [c["who"] for c in cw.CONCEPTS if c["region"] == region][0]
+    history["models"][name] = {"concept": who, "region": region}
+    history["used_names"].append(name)
+    return history
+
+
+def test_create_model_caches_the_face_locally(face_dir):
+    _, _, history = _run_one()
+    name = list(history["models"])[0]
+    assert cw.face_path(name).read_bytes() == FakeImages.FACE
+
+
+def test_backfill_generates_only_the_missing_shot_from_the_cached_face(face_dir):
+    name = "Claire Kim"
+    cw.save_face(name, FakeImages.FACE)
+    listing = {"models": [_model(name, ["Claire_Kim_face.png", "Claire_Kim_torso.png"])],
+               "picked": []}
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 1}, listing)
+    ai = FakeAI()
+    cw.run_once(client, ai, "gpt-image-2", _history_with(name), Rng())
+
+    assert client.uploads == [(name, "Claire_Kim_back.png", FakeImages.EDIT)]
+    assert ai.images.generate_calls == []  # no new face
+    assert len(ai.images.edit_calls) == 1
+    assert ai.images.edit_calls[0]["image"] == FakeImages.FACE
+    assert ai.images.edit_calls[0]["prompt"].startswith(cw.REFERENCE_PREFIX)
+
+
+def test_backfill_can_use_grok_for_the_missing_shot(face_dir):
+    name = "Claire Kim"
+    cw.save_face(name, FakeImages.FACE)
+    listing = {"models": [_model(name, ["Claire_Kim_face.png", "Claire_Kim_back.png"])],
+               "picked": []}
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 1}, listing)
+    ai = FakeAI()
+    calls = []
+    # Rng(0) draws "torso" out of EDIT_SHOTS, which is exactly the missing shot
+    cw.run_once(client, ai, "gpt-image-2", _history_with(name), Rng(0), make_grok(calls))
+
+    assert client.uploads == [(name, "Claire_Kim_torso.png", GROK_BYTES)]
+    assert len(calls) == 1 and ai.images.edit_calls == []
+
+
+def test_backfill_skips_models_without_a_local_face(face_dir):
+    name = "Claire Kim"  # in history, but no cached face
+    listing = {"models": [_model(name, ["Claire_Kim_face.png"])], "picked": []}
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 1}, listing)
+    ai = FakeAI()
+    cw.run_once(client, ai, "gpt-image-2", _history_with(name), Rng())
+    assert client.uploads == []
+    assert ai.images.edit_calls == [] and ai.images.generate_calls == []
+
+
+def test_backfill_skips_models_the_worker_did_not_create(face_dir):
+    name = "Uploaded Manually"
+    cw.save_face(name, FakeImages.FACE)
+    listing = {"models": [_model(name, ["face.png"])], "picked": []}
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 1}, listing)
+    ai = FakeAI()
+    cw.run_once(client, ai, "gpt-image-2", fresh_history(), Rng())
+    assert client.uploads == []
+
+
+def test_backfill_leaves_complete_models_alone(face_dir):
+    name = "Claire Kim"
+    cw.save_face(name, FakeImages.FACE)
+    files = ["Claire_Kim_face.png", "Claire_Kim_torso.png", "Claire_Kim_back.png"]
+    listing = {"models": [_model(name, files)], "picked": []}
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 1}, listing)
+    ai = FakeAI()
+    cw.run_once(client, ai, "gpt-image-2", _history_with(name), Rng())
+    assert client.uploads == []
+
+
+def test_backfill_recognises_legacy_bare_shot_filenames(face_dir):
+    name = "Claire Kim"
+    cw.save_face(name, FakeImages.FACE)
+    listing = {"models": [_model(name, ["face.png", "torso.png", "back.png"])], "picked": []}
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 1}, listing)
+    ai = FakeAI()
+    cw.run_once(client, ai, "gpt-image-2", _history_with(name), Rng())
+    assert client.uploads == []
+
+
+def test_backfill_runs_before_the_top_up_step(face_dir):
+    name = "Claire Kim"
+    cw.save_face(name, FakeImages.FACE)
+    listing = {"models": [_model(name, ["Claire_Kim_face.png"])], "picked": []}
+    client = FakeBrainClient({"paused": False, "picked": [], "target": 2}, listing)
+    ai = FakeAI()
+    cw.run_once(client, ai, "gpt-image-2", _history_with(name), Rng())
+    order = [(m, f) for (m, f, _) in client.uploads]
+    # the two backfilled shots come first, then the brand-new model's three
+    assert order[0] == (name, "Claire_Kim_torso.png")
+    assert order[1] == (name, "Claire_Kim_back.png")
+    assert len(order) == 5
+    assert {m for (m, _) in order[2:]} != {name}
+
+
+def test_backfill_is_skipped_when_paused(face_dir):
+    name = "Claire Kim"
+    cw.save_face(name, FakeImages.FACE)
+    listing = {"models": [_model(name, ["Claire_Kim_face.png"])], "picked": []}
+    client = FakeBrainClient({"paused": True, "picked": [], "target": 10}, listing)
+    ai = FakeAI()
+    cw.run_once(client, ai, "gpt-image-2", _history_with(name), Rng())
+    assert client.uploads == []

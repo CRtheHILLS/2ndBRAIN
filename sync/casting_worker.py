@@ -35,6 +35,9 @@ from pathlib import Path
 import httpx
 
 HISTORY = Path.home() / ".brain-casting.json"
+# Every generated face is kept here so a later run can finish a model whose
+# torso/back never made it up (the reference chain needs the original face).
+FACE_DIR = Path.home() / ".brain-casting"
 
 TARGET_DEFAULT = 10
 SHOT_ORDER = ("face", "torso", "back")
@@ -626,18 +629,45 @@ def shot_filename(name: str, shot: str) -> str:
     return f"{name.replace(' ', '_')}_{shot}.png"
 
 
+def face_path(name: str) -> Path:
+    return FACE_DIR / shot_filename(name, "face")
+
+
+def save_face(name: str, data: bytes) -> None:
+    FACE_DIR.mkdir(parents=True, exist_ok=True)
+    face_path(name).write_bytes(data)
+
+
+def load_face(name: str):
+    p = face_path(name)
+    try:
+        return p.read_bytes() if p.is_file() else None
+    except OSError:
+        return None
+
+
+def has_shot(files, shot: str) -> bool:
+    """Tolerates both `<Model>_torso.png` and the older bare `torso.png`."""
+    for f in files or []:
+        stem = Path(f).stem.lower()
+        if stem == shot or stem.endswith(f"_{shot}"):
+            return True
+    return False
+
+
 # --- the pipeline -----------------------------------------------------------
 
 
-def create_model(brain_client, ai_client, image_model, name, who, rng, grok=None):
-    """Generate + upload the three shots of one model, face first."""
-    face = generate_face(ai_client, image_model, who)
-    _server(brain_client.upload, name, shot_filename(name, "face"), face)
-    _log(f"{name}: face uploaded")
-    _sleep(12)
+def generate_edit_shots(brain_client, ai_client, image_model, name, who, face, rng,
+                        grok=None, shots=EDIT_SHOTS):
+    """Edit `face` into the requested shots and upload each one.
 
+    The Grok/OpenAI split is always drawn over both edit shots, so a backfill
+    of a single missing shot follows exactly the same random rule as a fresh
+    model.
+    """
     grok_shot = rng.choice(EDIT_SHOTS) if grok is not None else None
-    for shot in EDIT_SHOTS:
+    for shot in shots:
         if shot == grok_shot:
             data = edit_with_grok(grok, face, who, shot, rng)
             _server(brain_client.upload, name, shot_filename(name, shot), data)
@@ -648,6 +678,45 @@ def create_model(brain_client, ai_client, image_model, name, who, rng, grok=None
             _server(brain_client.upload, name, shot_filename(name, shot), data)
             _log(f"{name}: {shot} uploaded (openai edit)")
             _sleep(12)
+
+
+def create_model(brain_client, ai_client, image_model, name, who, rng, grok=None):
+    """Generate + upload the three shots of one model, face first."""
+    face = generate_face(ai_client, image_model, who)
+    save_face(name, face)
+    _server(brain_client.upload, name, shot_filename(name, "face"), face)
+    _log(f"{name}: face uploaded")
+    _sleep(12)
+    generate_edit_shots(brain_client, ai_client, image_model, name, who, face, rng, grok)
+
+
+def backfill_missing_shots(brain_client, ai_client, image_model, models, history,
+                           rng=random, grok=None) -> int:
+    """Finish half-built models so they don't waste a slot in the pool.
+
+    Only models we created ourselves (present in the local history) and whose
+    face PNG is still cached locally can be finished — the reference chain
+    needs those exact face bytes. Anything else is left untouched; the worker
+    never deletes.
+    """
+    filled = 0
+    for m in models:
+        name = m.get("name")
+        entry = history["models"].get(name)
+        if not entry:
+            continue
+        missing = [s for s in EDIT_SHOTS if not has_shot(m.get("files"), s)]
+        if not missing:
+            continue
+        face = load_face(name)
+        if face is None:
+            _log(f"{name}: missing {', '.join(missing)} but no local face — skipping")
+            continue
+        _log(f"{name}: backfilling {', '.join(missing)}")
+        generate_edit_shots(brain_client, ai_client, image_model, name, entry["concept"],
+                            face, rng, grok, shots=missing)
+        filled += 1
+    return filled
 
 
 def run_once(brain_client, ai_client, image_model: str, history: dict, rng=random, grok=None) -> dict:
@@ -666,6 +735,8 @@ def run_once(brain_client, ai_client, image_model: str, history: dict, rng=rando
     active = listing.get("models") or []
     picked = listing.get("picked") or []
     taken = {m["name"] for m in active} | {m["name"] for m in picked} | set(history["used_names"])
+
+    backfill_missing_shots(brain_client, ai_client, image_model, active, history, rng, grok)
 
     count = len(active)
     if count >= target:
