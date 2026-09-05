@@ -8,7 +8,7 @@ from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depe
 from fastapi.responses import RedirectResponse, PlainTextResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from brain import store, ingest, distill, render, index, levels
+from brain import store, ingest, distill, render, index, levels, catalog
 from brain.config import get_settings
 from brain.ingest import _sanitize_filename
 from brain.slug import slugify
@@ -583,6 +583,49 @@ def books():
 @app.get("/search")
 def search(q: str, k: int = 10):
     return index.search(q, k)
+
+
+# ---------------------------------------------------------------------------
+# Knowledge catalog / learn queue
+# ---------------------------------------------------------------------------
+
+_CATALOG_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+@app.get("/catalog/stats")
+def catalog_stats():
+    return catalog.stats()
+
+
+@app.get("/catalog/pending")
+def catalog_pending():
+    return [{"id": i["id"], "book": i.get("book"), "file": i.get("file"),
+             "added_at": i.get("added_at")} for i in catalog.pending()]
+
+
+@app.post("/catalog/learn", dependencies=[Depends(require_token)])
+def catalog_learn(limit: int = 10):
+    return catalog.learn_pending(limit)
+
+
+@app.get("/catalog/graph")
+def catalog_graph():
+    return catalog.graph()
+
+
+@app.get("/catalog/entry/{entry_id}")
+def catalog_entry(entry_id: str):
+    if not _CATALOG_ID_RE.match(entry_id):
+        raise HTTPException(404, "그런 항목이 없어요")
+    e = catalog.get_entry(entry_id)
+    if e is None:
+        raise HTTPException(404, "그런 항목이 없어요")
+    return e
+
+
+@app.post("/catalog/backfill", dependencies=[Depends(require_token)])
+def catalog_backfill():
+    return {"registered": catalog.backfill()}
 
 
 @app.get("/debug/fs", dependencies=[Depends(require_token)])

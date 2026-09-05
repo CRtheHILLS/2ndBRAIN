@@ -123,12 +123,22 @@ def _sanitize_filename(filename: str) -> str:
     return name
 
 
+def _catalog_register(slug: str, filename: str, out: Path, sha: str) -> None:
+    """Put the file on the knowledge-catalog learn queue. Never fail ingest."""
+    try:
+        from . import catalog
+        catalog.register(slug, filename, out, sha)
+    except Exception:
+        pass
+
+
 def ingest_file(slug: str, filename: str, data: bytes) -> Path:
     filename = _sanitize_filename(filename)
     sha = hashlib.sha256(data).hexdigest()
     ext = Path(filename).suffix.lower()
     out = store.raw_dir(slug) / (Path(filename).stem + ".md")
     if out.exists() and store.read_md(out)[0].get("sha256") == sha:
+        _catalog_register(slug, filename, out, sha)
         return out
     (store.raw_dir(slug) / filename).write_bytes(data)  # keep original, before any llm call
     if ext in HEIC_EXTS:
@@ -147,4 +157,5 @@ def ingest_file(slug: str, filename: str, data: bytes) -> Path:
         kind, body = "text", _decode_text(data)
     store.write_md(out, {"book": slug, "source": filename, "sha256": sha, "kind": kind,
                          "ingested_at": dt.datetime.now().isoformat(timespec="seconds")}, body)
+    _catalog_register(slug, filename, out, sha)
     return out
