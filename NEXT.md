@@ -1,5 +1,10 @@
 # NEXT.md — 2nd BRAIN (Clair)
 
+## 2026-09-08(화) 재개 — CR이 Anthropic 크레딧 충전 예정
+- [ ] 충전 확인 후: POST /catalog/learn 반복 실행 → 대기열 106개+비숑 전부 분류 → /catalog/graph 확인
+- [ ] 비숑의모든것 소스: 추출 완료되면 brain-sync로 볼륨 업로드 (2026-09-05 추출 진행)
+- [ ] 지식 파이프라인 규칙: vault-first 답변 + 상황별 웹서치 (memory: knowledge-pipeline-rules)
+
 ## 내일(2026-08-25~) 제일 먼저 — 캐스팅 1차 진행 중
 - [x] 2026-08-25 볼륨 버그(DATA_DIR 경로 변환) 수정 + 전체 복구 완료; 워커 v2(참조 체인, 10명 고정) 가동
 - [ ] 캐스팅 센터: https://2ndbrain-production-4ab7.up.railway.app/casting — CR이 후보 삭제/PICK 진행. 삭제로 10명 미만이 되면 로컬 워커가 자동 충원 (**워커는 PC 재부팅 시 다시 켜야 함**: `XAI_API_KEY=<.env값> .venv/Scripts/python -m sync.casting_worker --url <BRAIN_URL> --token <BRAIN_TOKEN> --interval 90`)
