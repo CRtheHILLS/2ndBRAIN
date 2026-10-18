@@ -1,10 +1,10 @@
 # NEXT.md — 2nd BRAIN (Clair)
 
 ## 2026-10-19 내일 제일 먼저 — 마지막 수정 묶음 병합·배포 (CR 지시: 테스트는 내일)
-- [ ] 수정 묶음 브랜치 `worktree-agent-a00fdbafac0816606`(커밋 e735993..65de445, 420 테스트 통과했다고 보고됨)을 `feat/learn-quest`에 병합: `git merge --no-ff worktree-agent-a00fdbafac0816606` → `.venv/Scripts/python -m pytest -q`
+- [x] 수정 묶음은 `feat/learn-quest`에 병합됨(adcb934). 마지막 재검토(opus)도 '전부 해결, 새 문제 없음'으로 끝남. **내일 첫 명령:** `.venv/Scripts/python -m pytest -q` (420개 예상)
 - [ ] 통과하면 `git checkout main && git merge --no-ff feat/learn-quest` → `pip install -e .`(brain-sync/brain-learn 명령 복구) → `railway up`
 - [ ] 배포 후 확인: `GET /vault.zip`(지금 배포본은 500 — 수정 묶음에 고침 포함), `python -m sync.learn_cli ask "창세기 첫째 날의 빛이 태양보다 먼저인 건 과학적으로?"`(수정 전엔 수업 내용을 못 찾음), `/search`는 이제 토큰 필요, 그래프 페이지 토큰은 `#t=`로 바뀜
-- [ ] 수정 묶음의 마지막 검토(opus 재검토)는 세션 종료로 결과를 못 받음 → 병합 전에 `.superpowers/sdd/2026-10-18-learn-quest/final-fix-report.md`를 읽고, 의심되면 `tests/` 전체 + 아래 다섯 우려를 눈으로 확인: ① `_thin` 규칙이 벡터 꺼진 상태에서 웹을 자주 부름 ② `xai_search.CURRENT_LOG` 전역(퀘스트 2개 동시 수집 시 로그 섞임) ③ 검색 사용량은 일일 상한에서 제외(비용 추정엔 포함) ④ vec 확장은 연결마다 load ⑤ 2글자 검색은 LIKE 전체 스캔
+- [ ] 재검토는 깨끗했지만 아래 다섯 우려는 운영하며 지켜볼 것 → 필요하면 `.superpowers/sdd/2026-10-18-learn-quest/final-fix-report.md`를 읽고, 의심되면 `tests/` 전체 + 아래 다섯 우려를 눈으로 확인: ① `_thin` 규칙이 벡터 꺼진 상태에서 웹을 자주 부름 ② `xai_search.CURRENT_LOG` 전역(퀘스트 2개 동시 수집 시 로그 섞임) ③ 검색 사용량은 일일 상한에서 제외(비용 추정엔 포함) ④ vec 확장은 연결마다 load ⑤ 2글자 검색은 LIKE 전체 스캔
 - [ ] 진행 장부: `.superpowers/sdd/2026-10-18-learn-quest/progress.md` (모든 결정·보류 항목). 워크트리 `.claude/worktrees/agent-a00fdbafac0816606`는 병합 후 `git worktree remove --force`
 - 현재 배포본 = feat/learn-quest @ fb319c5 (퀘스트·다리·그래프·검색·/ask 동작, vault.zip만 500). 로컬 `feat/learn-quest`는 38747e3 이후 문서 커밋만 추가됨
 
