@@ -38,6 +38,8 @@ SHOWN_RELS = ("bridge", "requires", "is_a", "related")
 def _clean(name: str) -> str:
     s = _BAD.sub(" ", name or "").strip(" .")
     s = re.sub(r"\s+", " ", s)[:80].strip(" .")
+    if re.fullmatch(r"(?i)con|prn|aux|nul|com[1-9]|lpt[1-9]", s.split(".")[0]):
+        s += "_"
     return s or "이름없음"
 
 
@@ -89,19 +91,25 @@ def build_zip() -> bytes:
         return f"{_clean(area_name.get(f['area'], f['area']))}/{_clean(f['name_ko'])}"
 
     stem: dict[str, str] = {}
-    used: set[tuple[str, str]] = set()
-    for n in concepts:
-        base = _clean(n["label_ko"] or n["label_en"] or n["id"])
-        d = folder(n)
+    used: set[str] = {"readme"}  # basenames are global: Obsidian resolves [[stem]] vault-wide
+
+    def unique(base: str, suffix: str = "") -> str:
         s = base
-        if (d, s.lower()) in used:
-            s = _clean(f"{base}-{n['field_code'] or 'x'}")
+        if s.lower() in used and suffix:
+            s = _clean(f"{base}-{suffix}")
         k = 2
-        while (d, s.lower()) in used:
-            s = f"{base}-{n['field_code'] or 'x'}-{k}"
+        while s.lower() in used:
+            s = f"{base}-{suffix}-{k}" if suffix else f"{base}-{k}"
             k += 1
-        used.add((d, s.lower()))
-        stem[n["id"]] = s
+        used.add(s.lower())
+        return s
+
+    for n in concepts:
+        stem[n["id"]] = unique(_clean(n["label_ko"] or n["label_en"] or n["id"]), n["field_code"] or "x")
+    source_stem = {n["id"]: unique(_clean(n["id"].replace(":", "-"))) for n in nodes if n["kind"] == "source"}
+    book_slugs = {e["dst"][5:] for e in edges if e["rel"] == "in_book" and e["dst"].startswith("book:")}
+    book_slugs |= {b.get("slug") for b in store.list_books() if b.get("slug")}
+    book_stem = {slug: unique(_clean(slug)) for slug in sorted(book_slugs)}
     path_of = {n["id"]: f"vault/{folder(n)}/{stem[n['id']]}.md" for n in concepts}
 
     def link(cid: str) -> str:
@@ -127,7 +135,7 @@ def build_zip() -> bytes:
     entries = {e["id"][:16]: e for e in catalog.learned() if e.get("id")}
 
     def src_stem(nid: str) -> str:
-        return _clean(nid.replace(":", "-"))
+        return source_stem[nid]
 
     about: dict[str, list[str]] = {}
     for e in edges:
@@ -139,8 +147,15 @@ def build_zip() -> bytes:
             sources_of.setdefault(c, []).append(sid)
 
     def src_url(nid: str) -> str:
-        e = entries.get(nid.split(":", 1)[-1], {})
-        return e.get("url") or e.get("source_url") or ""
+        e = entries.get(nid.split(":", 1)[-1])
+        if not e:
+            return ""
+        try:
+            raw = catalog._raw_path(e) if (e.get("path") or e.get("book")) else None
+            src = str(store.read_md(raw)[0].get("source") or "").strip() if raw else ""
+        except (OSError, ValueError, KeyError):
+            return ""
+        return src if src.startswith("http") else ""
 
     # ---- concept files -----------------------------------------------------------
     out_edges: dict[str, list[dict]] = {}
@@ -262,7 +277,7 @@ def build_zip() -> bytes:
         b = [f"# {titles.get(slug, slug)}", "", "## 자료",
              *[f"- [[{src_stem(m)}]]" for m in mem], "", "## 개념",
              *[f"- {link(c)}" for c in cs], ""]
-        files[f"vault/서재/{_clean(slug)}.md"] = "\n".join(b).rstrip() + "\n"
+        files[f"vault/서재/{book_stem[slug]}.md"] = "\n".join(b).rstrip() + "\n"
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:

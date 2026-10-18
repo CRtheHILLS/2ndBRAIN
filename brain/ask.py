@@ -1,6 +1,8 @@
 """RAG answers: vault first, web only when the vault is thin, citations verified server-side."""
 import hashlib
+import html as _html
 import re
+from html.parser import HTMLParser
 
 from . import graph, models, retrieve, think
 from .connectors import registry
@@ -8,6 +10,45 @@ from .prompts import ask_system
 
 WEB_CHARS = 1200
 LOW_SCORE = 0.02
+
+
+ALLOWED_TAGS = {"p", "ul", "ol", "li", "strong", "em", "br"}
+_DROP = {"script", "style"}
+
+
+class _Clean(HTMLParser):
+    def __init__(self, ok: set[int]):
+        super().__init__(convert_charrefs=True)
+        self.ok, self.out, self.skip = ok, [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _DROP:
+            self.skip += 1
+        elif tag in ALLOWED_TAGS and not self.skip:
+            self.out.append(f"<{tag}>")
+
+    def handle_startendtag(self, tag, attrs):
+        if tag == "br" and not self.skip:
+            self.out.append("<br>")
+
+    def handle_endtag(self, tag):
+        if tag in _DROP:
+            self.skip = max(0, self.skip - 1)
+        elif tag in ALLOWED_TAGS and tag != "br" and not self.skip:
+            self.out.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        if self.skip:
+            return
+        data = re.sub(r"\[(\d+)\]", lambda m: m.group(0) if int(m.group(1)) in self.ok else "", data)
+        self.out.append(_html.escape(data, quote=False))
+
+
+def sanitize_answer(text: str, ok: set[int]) -> str:
+    p = _Clean(ok)
+    p.feed(text or "")
+    p.close()
+    return "".join(p.out)
 
 
 def _hits(q: str) -> list[dict]:
@@ -85,6 +126,7 @@ def ask(q: str, mode: str = "auto", level: str = "초등") -> dict:
         n = int(m)
         if 1 <= n <= len(passages) and n not in cited:
             cited.append(n)
+    data["answer_html"] = sanitize_answer(data.get("answer_html", ""), set(cited))
     data["citations"] = [models.Citation(
         title=passages[n - 1].get("title", ""), url=passages[n - 1].get("url", ""),
         slug=passages[n - 1].get("slug", ""), path=passages[n - 1].get("path", "")).model_dump()
@@ -92,6 +134,6 @@ def ask(q: str, mode: str = "auto", level: str = "초등") -> dict:
     n_vault = sum(1 for p in passages if not p.get("web"))
     data["used_vault_ratio"] = n_vault / len(passages) if passages else 0.0
     _record_question(q, passages)
-    data["hits"] = len(hits)
+    data["hits"] = n_vault
     data["web_used"] = web_used
     return data

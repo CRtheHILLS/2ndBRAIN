@@ -55,3 +55,34 @@ def test_vault_route_requires_token_and_returns_zip(data_dir):
     assert r.status_code == 200 and r.headers["content-type"].startswith("application/zip")
     assert "2ndbrain-vault.zip" in r.headers["content-disposition"]
     assert zipfile.ZipFile(io.BytesIO(r.content)).namelist()
+
+
+def test_vault_stems_global_unique_and_links_resolve(data_dir):
+    graph.upsert_node("c:1", "concept", "파동", field_code="A1")
+    graph.upsert_node("c:2", "concept", "파동", field_code="B1")
+    graph.upsert_node("c:3", "concept", "CON", field_code="A1")
+    graph.add_edge("c:1", "c:2", "bridge", reason="같은 이름")
+    _, f = _zip()
+    names = [n.rsplit("/", 1)[1][:-3] for n in f if n.count("/") == 3]
+    assert len(names) == len(set(n.lower() for n in names)) and "CON_" in names
+    c1 = next(v for v in f.values() if 'id: "c:1"' in v)
+    c2 = next(v for v in f.values() if 'id: "c:2"' in v)
+    s2 = [n for n in names if n.startswith("파동") and n != "파동"]
+    assert len(s2) == 1 and f"[[{s2[0]}]]" in c1 and "[[파동]]" in c2
+
+
+def test_vault_source_url_from_raw_frontmatter(data_dir):
+    from brain import catalog, store
+    raw = data_dir / "books" / "bk" / "raw" / "a.md"
+    store.write_md(raw, {"source": "https://ex.org/a"}, "본문")
+    eid = catalog.make_id("bk", "a.md")
+    ep = catalog.entry_path(eid)
+    ep.parent.mkdir(parents=True, exist_ok=True)
+    ep.write_text('{"id": "%s", "book": "bk", "file": "a.md", "path": "%s", "title": "t"}'
+                  % (eid, str(raw).replace("\\", "/")), "utf-8")
+    graph.upsert_node("c:1", "concept", "개념", field_code="A1")
+    graph.upsert_node("src:" + eid[:16], "source", "문서")
+    graph.add_edge("src:" + eid[:16], "c:1", "about")
+    _, f = _zip()
+    assert "https://ex.org/a" in f["vault/자료/src-" + eid[:16] + ".md"]
+    assert "https://ex.org/a" in next(v for k, v in f.items() if k.endswith("/개념.md"))

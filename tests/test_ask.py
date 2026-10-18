@@ -82,3 +82,11 @@ def test_ask_503_when_think_unavailable(data_dir, monkeypatch):
         assert c.post("/ask", json={"q": "x"}).status_code == 401
         r = c.post("/ask", headers=H, json={"q": "x"})
     assert r.status_code == 503 and "생각" in r.json()["detail"]
+
+
+def test_ask_answer_html_is_sanitized(data_dir, monkeypatch):
+    _patch(monkeypatch, 3, "<script>alert(1)</script><p onclick=x>안녕 [1] [9] <b>굵게</b></p>")
+    r = ask.ask("질문")
+    h = r["answer_html"]
+    assert "script" not in h and "alert" not in h and "onclick" not in h and "<b>" not in h
+    assert "[1]" in h and "[9]" not in h and h.startswith("<p>")
