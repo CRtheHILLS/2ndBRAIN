@@ -156,4 +156,149 @@ def test_search_all_timeout_is_shared_deadline(monkeypatch):
 
 
 def test_all_connectors_names():
-    assert set(registry.all_connectors()) == {"wikipedia", "openalex", "arxiv", "pubmed", "semanticscholar"}
+    assert set(registry.all_connectors()) == {"wikipedia", "openalex", "arxiv", "pubmed", "semanticscholar",
+                                              "webpage", "youtube", "ddgs", "xai", "vault"}
+
+
+# ---- Task 9: webpage / youtube / ddgs / xai / vault ----
+import pymupdf  # noqa: E402
+
+from brain.connectors import ddgs_web, vault, webpage, xai_search, youtube  # noqa: E402
+from brain.connectors.base import Candidate, Doc  # noqa: E402
+
+
+def test_extract_html_uses_trafilatura_on_local_string():
+    html = ("<html><head><title>양자 문서</title></head><body><article><h1>양자</h1>"
+            + "<p>양자역학은 원자 규모의 물리 현상을 설명하는 이론이다. 많은 실험이 이를 뒷받침한다.</p>" * 5
+            + "</article></body></html>")
+    title, text = webpage.extract_html(html, "https://example.org/q")
+    assert "양자" in title
+    assert "양자역학" in text
+
+
+def test_extract_pdf_caps_pages():
+    doc = pymupdf.open()
+    for i in (1, 2, 3):
+        doc.new_page().insert_text((72, 72), f"content {i}")
+    data = doc.tobytes()
+    text = webpage.extract_pdf(data, max_pages=2)
+    assert "<!-- page 1 -->" in text and "<!-- page 2 -->" in text
+    assert "<!-- page 3 -->" not in text and "content 3" not in text
+
+
+def test_ddgs_kind_guess_and_empty_on_exception(monkeypatch):
+    class Fake:
+        def text(self, query, max_results, region):
+            assert region == "kr-kr"
+            return [
+                {"title": "a", "href": "https://www.youtube.com/watch?v=abc", "body": "x"},
+                {"title": "b", "href": "https://www.nasa.gov/x", "body": "y"},
+                {"title": "c", "href": "https://foo.tistory.com/1", "body": "z"},
+                {"title": "d", "href": "https://example.com/", "body": "w"},
+            ]
+    monkeypatch.setattr(ddgs_web, "DDGS", Fake)
+    cands = ddgs_web.search("q", "ko", 4)
+    assert [c.kind for c in cands] == ["video", "official", "forum", "web"]
+    assert all(c.connector == "ddgs" for c in cands)
+
+    class Boom:
+        def text(self, *a, **k):
+            raise RuntimeError("rate limit")
+    monkeypatch.setattr(ddgs_web, "DDGS", Boom)
+    assert ddgs_web.search("q", "en", 3) == []
+
+
+def _set_xai_key(monkeypatch, value):
+    from brain import config
+    monkeypatch.setenv("XAI_API_KEY", value)
+    config.get_settings.cache_clear()
+
+
+def test_xai_search_returns_empty_without_key(data_dir, monkeypatch):
+    _set_xai_key(monkeypatch, "")
+    with respx.mock:  # any request would raise
+        assert xai_search.search("q", "ko", 3) == []
+
+
+@respx.mock
+def test_xai_search_parses_json(data_dir, monkeypatch):
+    _set_xai_key(monkeypatch, "k")
+    text = 'Here: [{"url": "https://mit.edu/a", "title": "A", "kind": "web"}, {"url": "https://x.com/b", "title": "B"}] done'
+    route = respx.post("https://api.x.ai/v1/responses").mock(return_value=httpx.Response(200, json={
+        "output": [{"type": "web_search_call"},
+                   {"type": "message", "content": [{"type": "output_text", "text": text}]}]}))
+    cands = xai_search.search("q", "ko", 2)
+    assert route.called
+    assert [c.url for c in cands] == ["https://mit.edu/a", "https://x.com/b"]
+    assert cands[0].kind == "official" and cands[0].connector == "xai"
+
+
+def test_vault_search_wraps_index_hits(data_dir):
+    d = data_dir / "books" / "qm" / "notes"
+    d.mkdir(parents=True)
+    (d / "intro.md").write_text("---\ntitle: t\n---\n양자역학 파동함수 설명 본문입니다.\n", encoding="utf-8")
+    from brain import index
+    index.rebuild()
+    cands = vault.search("양자역학", "ko", 3)
+    assert cands
+    c = cands[0]
+    assert c.url.startswith("vault://qm/") and c.kind == "textbook" and c.authority == 0.95
+    assert c.connector == "vault"
+    assert "파동함수" in vault.fetch(c).text
+
+
+def test_registry_fetch_routes_youtube_vault_and_fallback(monkeypatch):
+    calls = []
+    monkeypatch.setattr(youtube, "fetch", lambda c: calls.append("yt") or Doc(url=c.url, title="v", text="t"))
+    monkeypatch.setattr(vault, "fetch", lambda c: calls.append("vault") or Doc(url=c.url, title="n", text="t"))
+    monkeypatch.setattr(webpage, "fetch_url",
+                        lambda url, max_pages=None: calls.append("web") or Doc(url=url, title="w", text="t"))
+    monkeypatch.setattr(wikipedia, "fetch_title", lambda t, lang: None)
+
+    def mk(url, conn):
+        return Candidate(url=url, title="x", kind="web", connector=conn)
+    registry.fetch(mk("https://youtu.be/abc", "ddgs"))
+    registry.fetch(mk("vault://qm/notes/a.md", "vault"))
+    registry.fetch(mk("https://en.wikipedia.org/wiki/X", "wikipedia"))
+    registry.fetch(mk("https://example.com/p", "webpage"))
+    assert calls == ["yt", "vault", "web", "web"]
+    assert {"webpage", "youtube", "ddgs", "xai", "vault"} <= set(registry.all_connectors())
+
+
+@respx.mock
+def test_download_stops_at_max_bytes_and_rejects_big_content_length():
+    def chunks():
+        for _ in range(100):
+            yield b"x" * 100
+    respx.get("https://example.com/big").mock(return_value=httpx.Response(200, content=chunks()))
+    data, _ = webpage.download("https://example.com/big", max_bytes=500)
+    assert len(data) == 500
+    respx.get("https://example.com/huge").mock(return_value=httpx.Response(
+        200, content=b"abc", headers={"content-length": "999999"}))
+    import pytest
+    with pytest.raises(ValueError):
+        webpage.download("https://example.com/huge", max_bytes=500)
+
+
+def test_registry_fetch_never_raises_and_falls_back(monkeypatch):
+    class Boom:
+        name = "boom"
+        def fetch(self, c):
+            raise RuntimeError("x")
+    monkeypatch.setattr(registry, "all_connectors", lambda: {"boom": Boom()})
+    c = Candidate(url="https://example.com/p", title="x", kind="web", connector="boom")
+    monkeypatch.setattr(webpage, "fetch_url", lambda url, max_pages=None: Doc(url=url, title="w", text="t"))
+    assert registry.fetch(c).title == "w"
+
+    def bad(url, max_pages=None):
+        raise RuntimeError("y")
+    monkeypatch.setattr(webpage, "fetch_url", bad)
+    assert registry.fetch(c) is None
+
+
+def test_vault_fetch_returns_none_on_bad_file(data_dir):
+    d = data_dir / "books" / "qm" / "notes"
+    d.mkdir(parents=True)
+    (d / "bad.md").write_bytes(b"---\n: [unclosed\n---\n\xff\xfe body")
+    c = Candidate(url="vault://qm/notes/bad.md", title="t", kind="textbook", connector="vault")
+    assert vault.fetch(c) is None

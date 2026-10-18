@@ -87,3 +87,18 @@ def http_get(url: str, params: dict | None = None, timeout: float = 20,
     r = _get_client().get(url, params=params, timeout=timeout, headers=headers)
     r.raise_for_status()
     return r
+
+
+def http_download(url: str, max_bytes: int, timeout: float = 30) -> tuple[bytes, str]:
+    """Stream a GET, never buffering more than max_bytes. Rejects oversized Content-Length."""
+    with _get_client().stream("GET", url, timeout=timeout) as r:
+        r.raise_for_status()
+        declared = r.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > max_bytes:
+            raise ValueError(f"content-length {declared} exceeds cap {max_bytes}")
+        buf = bytearray()
+        for chunk in r.iter_bytes():
+            buf.extend(chunk)
+            if len(buf) >= max_bytes:
+                break
+        return bytes(buf[:max_bytes]), r.headers.get("content-type", "").lower()
