@@ -105,3 +105,10 @@ class SourceLedger(BaseModel):
     special_tried: list[dict] = Field(default_factory=list)
     vault_hits: list[dict] = Field(default_factory=list)
     new_connectors_tried: list[str] = Field(default_factory=list)
+
+
+# schema name (as stored in a quest task file) -> model class
+SCHEMAS: dict[str, type[BaseModel]] = {
+    "QuestPlan": QuestPlan,
+    "CatalogBatch": CatalogBatch,
+}
