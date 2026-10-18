@@ -1,10 +1,11 @@
 import json, re, shutil
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from . import llm, models, quest, store
 
 TPL = Path(__file__).parent / "templates"
-env = Environment(loader=FileSystemLoader(TPL), autoescape=select_autoescape(["html"]))
+env = Environment(loader=FileSystemLoader(TPL), autoescape=select_autoescape(["html", "j2"], default=True))
 
 LEVEL_INSTRUCTIONS = {
     "초등": "초등학생도 이해할 비유 (음악·작곡 비유 적극 활용), 전문용어 금지, 짧은 문장",
@@ -66,13 +67,39 @@ def render_shelf() -> Path:
 
 # --- quest pages --------------------------------------------------------------
 
-_SVG_BAD = re.compile(r"<script|[\s\"'/]on\w+\s*=|href|xlink|<foreignObject|<iframe|javascript:|<style|url\(", re.I)
+SVG_TAGS = {"svg", "g", "circle", "rect", "ellipse", "line", "polyline", "polygon", "path", "text",
+            "tspan", "title", "defs", "marker"}
+_SVG_ATTR = re.compile(r"^[a-zA-Z-]+$")
+_SVG_ENTITY = re.compile(r"&#|&(?!(?:amp|lt|gt|quot|apos);)\w+;")
+_SVG_BAD_ATTRS = {"href", "style"}
+
+def _local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
 
 def _sanitize_svg(svg: str) -> str:
+    """Allow-list: parse, keep only simple shapes/text, re-serialize the parsed tree; else ""."""
     s = (svg or "").strip()
-    if "<svg" not in s.lower() or _SVG_BAD.search(s):
+    if not s or "<!" in s or _SVG_ENTITY.search(s):
         return ""
-    return s
+    try:
+        root = ET.fromstring(s)
+    except ET.ParseError:
+        return ""
+    if _local(root.tag) != "svg":
+        return ""
+    for el in root.iter():
+        if not isinstance(el.tag, str) or _local(el.tag) not in SVG_TAGS:
+            return ""
+        el.tag = _local(el.tag)  # inline SVG in HTML needs no namespace prefix
+        for name, value in el.attrib.items():
+            v = re.sub(r"\s+", "", value).lower()
+            if (not _SVG_ATTR.match(name) or name.lower().startswith("on") or name.lower() in _SVG_BAD_ATTRS
+                    or "javascript:" in v or "url(" in v):
+                return ""
+    root.attrib.pop("width", None)
+    root.attrib.pop("height", None)
+    root.attrib.setdefault("viewBox", "0 0 200 120")
+    return ET.tostring(root, encoding="unicode")
 
 def _quest_site(slug: str) -> Path:
     d = store.site_dir() / "quests" / slug
@@ -108,6 +135,7 @@ def render_quest_day(slug: str, n: int) -> Path:
     next_n = nums[i + 1] if 0 <= i < len(nums) - 1 else None
     for d in lesson["dots"]:
         d["svg"] = _sanitize_svg(d["picture_svg"])
+        d["links"] = [u for u in d["sources"] if u.startswith(("http://", "https://"))]
     bridges = _bridges([d["concept_id"] for d in lesson["dots"] if d["concept_id"]])
     out = _quest_site(slug) / f"day-{n}.html"
     out.write_text(env.get_template("quest_day.html.j2").render(

@@ -26,7 +26,8 @@
       {% if d.analogy %}<p><b>비유로 보면</b> {{ d.analogy }}</p>{% endif %}
       {% if d.real_example %}<p><b>진짜 예</b> {{ d.real_example }}</p>{% endif %}
       {% if d.why_it_matters %}<p><b>왜 중요해요?</b> {{ d.why_it_matters }}</p>{% endif %}
-      {% if d.sources %}<p class="src">원문:{% for u in d.sources if u.startswith(("http://", "https://")) %} <a href="{{ u }}" target="_blank" rel="noopener">[{{ loop.index }}]</a>{% endfor %}</p>{% endif %}
+      {% if d.links %}<p class="src">원문:{% for u in d.links %} <a href="{{ u }}" target="_blank" rel="noopener">[{{ loop.index }}]</a>{% endfor %}</p>
+      {% else %}<p class="src"><span class="grade nosrc">출처 없음 — 확인 필요</span></p>{% endif %}
     </article>
     {% endfor %}
   </div>

@@ -46,6 +46,34 @@ def test_stage_teach_writes_day_json_and_pages_and_lesson_nodes(data_dir, monkey
     assert q["budget"]["think_calls"] == 2
 
 
+def test_teach_user_trims_excerpts_then_bridges_then_yesterday(data_dir, monkeypatch):
+    slug = make_quest(days=())
+    q = quest.load(slug)
+    q["plan"]["bridge_hints"] = [{"target": "음악", "why": "브릿지 이유 " * 20}]
+    prev = day_lesson(1)
+    prev["dots"] = [{**prev["dots"][0], "concept_ko": f"어제점{i}", "one_line": "어제 한 줄 " * 10}
+                    for i in range(5)]
+    day2 = q["plan"]["days"][1]
+    ledger = models.SourceLedger()
+
+    def user(limit):
+        monkeypatch.setattr(quest_stages, "TEACH_MAX_CHARS", limit)
+        return quest_stages._teach_user(slug, q, day2, 1, prev, ledger)
+
+    monkeypatch.setattr(quest_stages, "_dot_excerpts", lambda s, d: [])
+    bare = user(100_000)
+    monkeypatch.setattr(quest_stages, "_dot_excerpts", lambda s, d: ["   [출처: x] " + "발췌 " * 300] * 3)
+    full = user(100_000)
+    assert full.startswith("수준: 초등") and "브릿지 이유" in full and "어제점4" in full and "발췌 발췌" in full
+    assert user(len(bare)) == bare  # 1st: all excerpts go, everything else stays
+    m = user(len(bare) - 1)  # 2nd: bridge hints go
+    assert "브릿지 이유" not in m and "어제점4" in m
+    m = user(len(m) - 1)  # 3rd: yesterday's dot lines shrink from the end, its big idea stays
+    assert "어제점4" not in m and "어제점0" in m and "- 큰 생각:" in m
+    tiny = user(120)  # last resort tail cut never removes the level rules at the top
+    assert len(tiny) <= 120 and tiny.startswith("수준: 초등\n초등학생도")
+
+
 def test_day_lesson_grade_coercion():
     def grade(g):
         d = day_lesson()

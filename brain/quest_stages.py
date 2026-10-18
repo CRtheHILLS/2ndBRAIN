@@ -150,12 +150,24 @@ def _dot_excerpts(slug: str, dot: dict) -> list[str]:
 
 def _teach_user(slug: str, q: dict, day: dict, first_n: int, prev: dict | None,
                 ledger: models.SourceLedger) -> str:
+    """Day message.  Level rules come first so no trim can drop them; when too long, trim
+    excerpts, then bridge hints, then yesterday's dot lines, and only then cut the tail."""
     plan, n = q["plan"], day["n"]
-    head = [f"퀘스트: {plan['title_ko']} (종류: {_KIND_KO.get(plan['kind'], plan['kind'])})",
+    level = q.get("level") or "초등"
+    head = [f"수준: {level}", prompts.TEACH_LEVEL_RULES.get(level, prompts.TEACH_LEVEL_RULES["초등"]), "",
+            f"퀘스트: {plan['title_ko']} (종류: {_KIND_KO.get(plan['kind'], plan['kind'])})",
             f"목표: {plan['one_line_goal']}",
             f"Day {n}/총 {len(plan['days'])}",
-            f"오늘의 큰 생각: {day['big_idea']}", "", "오늘의 점:"]
-    dots = []  # (lines, excerpts) per dot; excerpts are trimmed first when the message is too long
+            f"오늘의 큰 생각: {day['big_idea']}"]
+    h = plan.get("honesty") or {}
+    if n == first_n and any(h.get(k) for k in ("learnable_by_reading", "needs_practice", "hype_warning")):
+        head += ["", "정직 상자 (첫날이니 이야기나 점 설명에서 한 번 짚어 주기):"]
+        for key, label in (("learnable_by_reading", "읽어서 되는 것"), ("needs_practice", "몸으로 해야 하는 것"),
+                           ("hype_warning", "과장 주의")):
+            if h.get(key):
+                head.append(f"- {label}: {', '.join(h[key])}")
+    head += ["", "오늘의 점:"]
+    dots = []  # (lines, excerpts) per dot
     for i, d in enumerate(day["dots"], 1):
         en = f" ({d['concept_en']})" if d.get("concept_en") else ""
         urls = list(dict.fromkeys(s.url for s in ledger.sources if s.fetched and s.dot == d["concept_ko"]))
@@ -164,30 +176,27 @@ def _teach_user(slug: str, q: dict, day: dict, first_n: int, prev: dict | None,
                  "   쓸 수 있는 출처 URL: " + (" , ".join(urls) if urls else "(없음 — sources는 빈 배열)"),
                  "   자료 발췌:"]
         dots.append((lines, _dot_excerpts(slug, d)))
-    tail = []
-    if prev:
-        tail += ["", "어제 배운 것:", f"- 큰 생각: {prev['big_idea_one_line']}",
-                 *(f"- {c['concept_ko']}: {c['one_line']}" for c in prev["dots"])]
-    if plan.get("bridge_hints"):
-        tail += ["", "다른 분야와 이어질 만한 곳:",
-                 *(f"- {b['target']}: {b.get('why') or ''}".rstrip(": ") for b in plan["bridge_hints"])]
-    h = plan.get("honesty") or {}
-    if n == first_n and any(h.get(k) for k in ("learnable_by_reading", "needs_practice", "hype_warning")):
-        tail += ["", "정직 상자 (첫날이니 이야기나 점 설명에서 한 번 짚어 주기):"]
-        for key, label in (("learnable_by_reading", "읽어서 되는 것"), ("needs_practice", "몸으로 해야 하는 것"),
-                           ("hype_warning", "과장 주의")):
-            if h.get(key):
-                tail.append(f"- {label}: {', '.join(h[key])}")
-    level = q.get("level") or "초등"
-    tail += ["", f"수준: {level}", prompts.TEACH_LEVEL_RULES.get(level, prompts.TEACH_LEVEL_RULES["초등"])]
+    yesterday = [f"- {c['concept_ko']}: {c['one_line']}" for c in prev["dots"]] if prev else []
+    bridges = [f"- {b['target']}: {b.get('why') or ''}".rstrip(": ") for b in plan.get("bridge_hints") or []]
 
     def build() -> str:
         body = [line for lines, exs in dots for line in (*lines, *(exs or ["   (발췌 없음)"]))]
+        tail = []
+        if prev:
+            tail += ["", "어제 배운 것:", f"- 큰 생각: {prev['big_idea_one_line']}", *yesterday]
+        if bridges:
+            tail += ["", "다른 분야와 이어질 만한 곳:", *bridges]
         return "\n".join(head + body + tail)
 
     msg = build()
     while len(msg) > TEACH_MAX_CHARS and any(exs for _, exs in dots):
         max(dots, key=lambda d: len(d[1]))[1].pop()
+        msg = build()
+    if len(msg) > TEACH_MAX_CHARS and bridges:
+        bridges.clear()
+        msg = build()
+    while len(msg) > TEACH_MAX_CHARS and yesterday:
+        yesterday.pop()
         msg = build()
     return msg[:TEACH_MAX_CHARS]
 

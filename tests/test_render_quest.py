@@ -52,17 +52,41 @@ def test_render_day_contains_sections_and_single_level(data_dir):
 
 
 def test_svg_sanitizer_drops_script(data_dir):
-    good = '<svg viewBox="0 0 200 120"><rect width="10" height="10"/></svg>'
-    assert render._sanitize_svg(good) == good
-    for bad in ('<svg><script>alert(1)</script></svg>', '<svg onload="x()"></svg>',
+    good = '<svg viewBox="0 0 200 120"><circle cx="10" cy="10" r="5"/><text x="2" y="20">빛</text></svg>'
+    out = render._sanitize_svg(good)
+    assert out.startswith('<svg viewBox="0 0 200 120">') and "<circle" in out and ">빛</text>" in out
+    ns = render._sanitize_svg('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="9"><rect/></svg>')
+    assert ns == '<svg viewBox="0 0 200 120"><rect /></svg>'  # no ns0: prefix, size dropped, viewBox set
+    for bad in ('<svg><script>alert(1)</script></svg>', '<svg onload="x()"></svg>', "<svg onload=x()></svg>",
                 '<svg><a href="https://evil"><text>x</text></a></svg>',
-                '<svg><foreignObject></foreignObject></svg>', "<b>not svg</b>"):
-        assert render._sanitize_svg(bad) == ""
+                '<svg><foreignObject></foreignObject></svg>', "<b>not svg</b>",
+                '<svg><text hr&#101;f="x">a</text></svg>',
+                '<svg><path d="jav&#97;script:x"/></svg>',
+                '<p>hi</p><svg></svg><img src=//evil>',
+                '<svg></svg><object data="//evil"></object>',
+                '<svg><rect style="fill:red"/></svg>', '<svg><rect fill="url(//evil)"/></svg>'):
+        assert render._sanitize_svg(bad) == "", bad
     slug = make_quest()
     (quest.quest_dir(slug) / "days" / "day-1.json").write_text(
         json.dumps(day_lesson(1, svg='<svg onload="x()"></svg>'), ensure_ascii=False), "utf-8")
     html = render.render_quest_day(slug, 1).read_text("utf-8")
     assert "onload" not in html and "🚁" in html
+
+
+def test_quest_pages_escape_text_and_flag_unsourced_dots(data_dir):
+    slug = make_quest()
+    lesson = day_lesson(1)
+    lesson["story_opening"] = "<script>1</script>"
+    lesson["dots"][0]["sources"] = ["javascript:alert(1)"]
+    (quest.quest_dir(slug) / "days" / "day-1.json").write_text(json.dumps(lesson, ensure_ascii=False), "utf-8")
+    html = render.render_quest_day(slug, 1).read_text("utf-8")
+    assert "<script>1</script>" not in html and "&lt;script&gt;1&lt;/script&gt;" in html
+    assert "javascript:" not in html and "출처 없음 — 확인 필요" in html
+    quest.save_ledger(slug, models.SourceLedger(sources=[models.SourceRecord(
+        url="https://ex.org/b", title="<b>굵게</b>", kind="web", connector="web", score=0.5, day=1,
+        dot="양력", lang="ko", why_picked="", fetched=True)]))
+    index_html = render.render_quest(slug).read_text("utf-8")
+    assert "<b>굵게</b>" not in index_html and "&lt;b&gt;굵게&lt;/b&gt;" in index_html
 
 
 def test_render_quest_index_lists_days_honesty_sources(data_dir):

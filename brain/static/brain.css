@@ -28,7 +28,7 @@ mark{background:#ffe08a}table{border-collapse:collapse;width:100%}td,th{border-b
 .pic .emoji{font-size:3rem;line-height:1.3}
 .grade{font-size:.75rem;font-weight:700;border-radius:999px;padding:.1rem .6rem;white-space:nowrap}
 .grade-확립됨{color:var(--g-ok);background:var(--g-ok-bg)}.grade-연구중{color:var(--g-wip);background:var(--g-wip-bg)}
-.grade-추측{color:var(--g-guess);background:var(--g-guess-bg)}.grade-상술{color:var(--g-hype);background:var(--g-hype-bg)}
+.grade-추측{color:var(--g-guess);background:var(--g-guess-bg)}.grade-상술,.grade.nosrc{color:var(--g-hype);background:var(--g-hype-bg)}
 .quiz details{border:1px solid var(--line);border-radius:12px;padding:.6rem .9rem;margin:.6rem 0}
 .quiz summary{cursor:pointer;font-weight:600}.quiz details[open] summary{color:var(--accent)}.quiz details p{margin:.5rem 0 0}
 .say{border-left:4px solid var(--accent)}.clair{background:linear-gradient(135deg,var(--card),var(--bg))}
