@@ -1,14 +1,24 @@
 # NEXT.md — 2nd BRAIN (Clair)
 
+## 2026-10-18 학습 퀘스트 시스템 완성 — 다음 세션에 먼저 할 일
+- [ ] **CR 확인 5가지** (스펙 §10): ① xAI 유료 검색 켜 둘지(현재 켬, 소액) ② Anthropic 크레딧 충전 시점(지금 0 → Gemini 무료 + xAI가 일함) ③ 7일 기본값 유지? ④ 분류표 2단계(156개 분야, `brain/frame/taxonomy.json` status: draft) 검토 → v1 ⑤ 수업 페이지(/site/**)를 토큰 필요로 올릴지
+- [ ] **첫 퀘스트 피드백 받기:** 창세기 1장 창조론 7일 — 지도: https://2ndbrain-production-4ab7.up.railway.app/site/quests/quest-20261018-창세기-1장-창조론을-과학-고고학-역사-증거와-현재까지의-모든-논란-이슈/index.html (45 자료 · 29 점 · 162 개념 · 비용 ≈ $0.01 · 16분). 어느 부분이 아직 어려웠는지 → `rerender` 또는 프롬프트 보강
+  - 알려진 다듬을 점: 날마다 말투가 "~요"/"~이다"로 섞임 → teach 프롬프트에 존댓말 한 가지로 고정; 출처 링크가 "[1]"로만 보임 → 제목 표시
+- [ ] **분류 백로그 958건** (비숑 272·손자병법 300·장수마을 138·인간관계론 154·THE-MIND 86…): `POST /catalog/learn?limit=25&book=<책>` 반복. Gemini 무료 한도·일일 상한(THINK_DAILY_CAP=200) 안에서 하루 2~3권씩. 분류될수록 다리(bridge)가 저절로 늘어남
+- [ ] **두뇌 그래프 링크 CR에게 주기:** `/site/brain/index.html?t=<BRAIN_TOKEN>` (한 번 열면 브라우저에 저장). Obsidian: `GET /vault.zip` (토큰) → 압축 풀고 Obsidian에서 폴더 열기
+- [ ] Railway `railway.json` config-as-code 2026-12-01까지 마이그레이션(`railway config migrate`)
+- [ ] 로컬: `pip install -e .`를 다시 해 두었음(`brain-sync`, `brain-learn` 명령 사용 가능). 깃 `main`에 병합했으나 **origin에 push는 안 함**(CR 결정 필요)
+- 사용법 요약: 한 문장("…배우고 싶어") → Clair가 `/learn` 스킬 → `python -m sync.learn_cli start/watch`. 생각 담당(모델) 전부 실패 시 서버가 30분마다 재시도, 세션이 있으면 Clair가 과제를 직접 풀어 `submit`. README "학습 퀘스트" 절 참고
+
 ## 2026-10-11 NotebookLM 5권 추출 → 볼륨 업로드 완료 (로컬도 보관, CR 결정)
 - [x] 일본인장수마을의비결(138)·THE-MIND(86)·인간관계론(154)·손자병법(300)·창세기의창조와해석(28) 볼륨 업로드; 비숑은 기존 업로드 확인
 - [ ] 사진 소스 416개는 글자가 안 나옴 (NotebookLM도 텍스트 없음, 이미지 주소 만료). CR이 원본 사진(예: 20251127_205952.jpg, 폰/구글포토)을 폴더에 넣으면 로컬 OCR로 채우기
   - THE-MIND 67 · 인간관계론 153 · 손자병법 196
 
 ## 2026-09-08(화) 재개 — CR이 Anthropic 크레딧 충전 예정
-- [ ] 충전 확인 후: POST /catalog/learn 반복 실행 → 대기열 106개+비숑 전부 분류 → /catalog/graph 확인
-- [ ] 비숑의모든것 소스: 추출 완료되면 brain-sync로 볼륨 업로드 (2026-09-05 추출 진행)
-- [ ] 지식 파이프라인 규칙: vault-first 답변 + 상황별 웹서치 (memory: knowledge-pipeline-rules)
+- [x] (2026-10-18) /catalog/learn은 Gemini 무료 경로로 동작; 창세기 28·양자역학 97 분류 완료, 나머지 958건은 위 항목
+- [x] 비숑의모든것 소스 볼륨 업로드 완료
+- [x] 지식 파이프라인 규칙 → `/ask`(vault-first + 상황별 웹) 구현
 
 ## 내일(2026-08-25~) 제일 먼저 — 캐스팅 1차 진행 중
 - [x] 2026-08-25 볼륨 버그(DATA_DIR 경로 변환) 수정 + 전체 복구 완료; 워커 v2(참조 체인, 10명 고정) 가동
