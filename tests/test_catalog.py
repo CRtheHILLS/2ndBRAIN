@@ -153,7 +153,7 @@ def test_learn_pending_respects_limit(data_dir):
     for i in range(3):
         ingest.ingest_file("cosmos", f"c{i}.txt", f"본문 {i}".encode())
     r = catalog.learn_pending(2, llm_complete=lambda s, u: _batch(_card_dict(1), _card_dict(2)))
-    assert r == {"learned": 2, "failed": 0, "remaining": 1, "new_concepts": []}
+    assert r == {"learned": 2, "failed": 0, "remaining": 1, "new_concepts": ["양자-얽힘", "중첩"]}
 
 
 def test_learn_batch_matches_by_index_and_marks_missing(data_dir):
@@ -398,7 +398,7 @@ def test_catalog_learn_endpoint_processes_queue(data_dir, monkeypatch):
                    files={"file": (name, "우주".encode())})
         r = c.post("/catalog/learn", params={"limit": 1}, headers=TOKEN)
         assert r.status_code == 200
-        assert r.json() == {"learned": 1, "failed": 0, "remaining": 1, "new_concepts": []}
+        assert r.json() == {"learned": 1, "failed": 0, "remaining": 1, "new_concepts": ["양자-얽힘", "중첩"]}
 
         r = c.post("/catalog/learn", headers=TOKEN)
         assert r.json() == {"learned": 1, "failed": 0, "remaining": 0, "new_concepts": []}

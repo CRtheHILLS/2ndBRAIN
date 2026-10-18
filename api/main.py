@@ -8,7 +8,7 @@ from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depe
 from fastapi.responses import RedirectResponse, PlainTextResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from brain import store, ingest, distill, render, index, levels, catalog, think
+from brain import store, ingest, distill, render, index, levels, catalog, think, graph
 from brain.config import get_settings
 from brain.ingest import _sanitize_filename
 from brain.slug import slugify
@@ -629,6 +629,37 @@ def catalog_entry(entry_id: str):
 @app.post("/catalog/backfill", dependencies=[Depends(require_token)])
 def catalog_backfill():
     return {"registered": catalog.backfill()}
+
+
+# ---------------------------------------------------------------------------
+# Knowledge graph
+# ---------------------------------------------------------------------------
+
+@app.get("/graph", dependencies=[Depends(require_token)])
+def graph_view(center: str | None = None, depth: int = 1, field: str | None = None,
+               kind: str | None = None):
+    if center:
+        return graph.neighbors(center, depth)
+    if field:
+        return {"nodes": graph.by_field(field)}
+    if kind:
+        return {"nodes": graph.by_kind(kind, 200)}
+    raise HTTPException(400, "center, field, kind 중 하나는 꼭 필요해요.")
+
+
+@app.get("/graph/full", dependencies=[Depends(require_token)])
+def graph_full(limit: int = 2000):
+    return graph.full(limit)
+
+
+@app.get("/graph/stats")
+def graph_stats():
+    return graph.stats()
+
+
+@app.post("/graph/rebuild", dependencies=[Depends(require_token)])
+def graph_rebuild():
+    return {"replayed": graph.rebuild()}
 
 
 @app.get("/debug/fs", dependencies=[Depends(require_token)])
