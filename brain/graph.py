@@ -6,6 +6,7 @@ the same ``_apply`` used by every live write.
 """
 import datetime as dt
 import json
+import logging
 import re
 from collections import Counter
 from contextlib import closing
@@ -13,6 +14,8 @@ from typing import Iterable
 
 from . import db, frame
 from .config import get_settings
+
+log = logging.getLogger(__name__)
 
 RELS = ("is_a", "part_of", "requires", "related", "bridge", "contradicts", "cites",
         "about", "in_book", "taught_in", "asked")
@@ -295,10 +298,16 @@ def rebuild() -> int:
         for t in ("nodes", "aliases", "node_tags", "edges", "redirects"):
             con.execute(f"DELETE FROM {t}")
         if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
-                if line.strip():
-                    _apply(json.loads(line), con)
-                    n += 1
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if not line.strip():
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:  # e.g. a torn last line after a crash
+                    log.warning("graph log line %d is not JSON; skipped", lineno)
+                    continue
+                _apply(ev, con)
+                n += 1
     return n
 
 

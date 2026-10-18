@@ -26,15 +26,19 @@ def tick(now: dt.datetime | None = None) -> dict:
         slug = q.get("slug", "?")
         try:
             status = q.get("status")
-            if status == "running":
+            if status in ("running", "queued"):
                 if quest.is_running(slug):
                     out["skipped"].append(f"{slug}: 실행 중")
                     continue
-                quest.resume(slug)  # server restart recovery
+                quest.resume(slug)  # server restart recovery / never started
                 out["resumed"].append(slug)
             elif status == "waiting_thinker":
                 updated, created = _parse(q.get("updated_at")), _parse(q.get("created_at"))
-                if updated is None or created is None:
+                waiting = (q.get("summary") or {}).get("waiting_task")
+                if waiting and quest.task_result(slug, waiting) is not None and not quest.is_running(slug):
+                    quest.resume(slug)  # the answer is already in: no reason to wait for the retry window
+                    out["resumed"].append(slug)
+                elif updated is None or created is None:
                     out["skipped"].append(f"{slug}: 시각 정보 없음")
                 elif now - created > dt.timedelta(hours=s.think_retry_hours):
                     out["skipped"].append(f"{slug}: 재시도 기간 지남")

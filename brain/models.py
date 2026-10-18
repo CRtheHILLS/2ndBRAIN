@@ -13,8 +13,8 @@ class ConceptPair(BaseModel):
 class CatalogCard(BaseModel):
     index: int
     title: str
-    summary: str
-    domain: str
+    summary: str = ""
+    domain: str = "기타"
     field_code: str = ""
     tags: list[str] = Field(default_factory=list)
     concepts: list[str] = Field(default_factory=list)

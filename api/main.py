@@ -1,5 +1,6 @@
 import json
 import re
+import secrets
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Literal
 
 from fastapi.responses import Response, RedirectResponse, PlainTextResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from brain import store, ingest, distill, render, index, levels, catalog, think, graph, quest, scheduler
 from brain import retrieve
 from brain import ask as ask_mod, vault_export
@@ -524,7 +525,7 @@ async def _no_index_headers(request: Request, call_next):
 
 
 def require_token(x_brain_token: str = Header(default="")):
-    if x_brain_token != get_settings().brain_token:
+    if not secrets.compare_digest(x_brain_token.encode("utf-8"), get_settings().brain_token.encode("utf-8")):
         raise HTTPException(401, "bad token")
 
 
@@ -539,8 +540,8 @@ _QUEST_SLUG = re.compile(r"^[0-9a-z가-힣-]+$")
 
 
 class QuestCreate(BaseModel):
-    sentence: str
-    days: int | None = None
+    sentence: str = Field(..., min_length=2, max_length=600)
+    days: int | None = Field(None, ge=1, le=30)
     level: str | None = None
 
 
@@ -597,8 +598,9 @@ def quest_submit_task(slug: str, task_id: str, body: TaskOutput):
         raise HTTPException(400, str(e)) from None
     except KeyError:
         raise HTTPException(404, "그런 과제가 없어요") from None
-    quest.start_background(slug)
-    return {"accepted": True, "status": quest.load(slug)["status"]}
+    # still running (e.g. about to park on this very task)? the worker runs once more when it ends
+    started = quest.start_or_request_resume(slug)
+    return {"accepted": True, "status": quest.load(slug)["status"], "resume_requested": not started}
 
 
 @app.post("/quests/{slug}/resume", dependencies=[Depends(require_token)])
@@ -690,7 +692,7 @@ def books():
     return store.list_books()
 
 
-@app.get("/search")
+@app.get("/search", dependencies=[Depends(require_token)])  # spends embedding quota
 def search(q: str, k: int = 10, mode: str = "hybrid"):
     k = max(1, k)
     if mode == "fts":
@@ -787,7 +789,7 @@ def graph_full(limit: int = 2000):
     return graph.full(limit)
 
 
-@app.get("/graph/stats")
+@app.get("/graph/stats", dependencies=[Depends(require_token)])
 def graph_stats():
     return graph.stats()
 

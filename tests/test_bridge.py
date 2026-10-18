@@ -185,3 +185,13 @@ def test_affected_quests_and_rerender(data_dir, monkeypatch):
     monkeypatch.setattr(render, "render_quest", index)
     assert bridge.rerender_affected(["gyroscope"]) == ["quest-heli"]
     assert calls == [("day", "quest-heli", 2), ("index", "quest-heli")]
+
+
+def test_candidates_vector_channel_reads_id_distance_tuples(data_dir, monkeypatch):
+    from brain import vec
+    _seed("양자역학", [("스핀", "Spin")], code="B2")
+    _seed("헬리콥터", [("자이로스코프", "Gyroscope")], code="F9")
+    monkeypatch.setattr(vec, "similar_nodes",
+                        lambda text=None, node_id=None, k=5: [("gyroscope", 0.0), ("spin", 0.12)])
+    by_id = {c["id"]: c for c in bridge.candidates("gyroscope")}
+    assert by_id["spin"]["why"] == "vector" and "gyroscope" not in by_id

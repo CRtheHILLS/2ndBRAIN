@@ -73,3 +73,23 @@ def test_tick_survives_resume_error(data_dir, monkeypatch):
     monkeypatch.setattr(quest, "resume", boom)
     out = scheduler.tick()
     assert b in done and b in out["resumed"]
+
+
+def test_tick_resumes_at_once_when_waiting_task_is_done(data_dir, resumed):
+    slug = _make("헬리콥터", "waiting_thinker", updated_ago_min=1, created_ago_h=100)
+    q = quest.load(slug)
+    q["summary"]["waiting_task"] = "plan"
+    (quest.quest_dir(slug) / "quest.json").write_text(json.dumps(q, ensure_ascii=False), "utf-8")
+    quest._write_task(slug, {"task_id": "plan", "status": "done", "result": {"x": 1}})
+    assert scheduler.tick()["resumed"] == [slug] and resumed == [slug]
+
+
+def test_tick_resumes_queued_quest_not_running(data_dir, resumed):
+    slug = _make("광합성", "queued")
+    live = _make("발효", "queued")
+    quest._running.add(live)
+    try:
+        out = scheduler.tick()
+    finally:
+        quest._running.discard(live)
+    assert out["resumed"] == [slug] and resumed == [slug]

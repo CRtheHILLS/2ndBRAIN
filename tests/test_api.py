@@ -33,10 +33,11 @@ def test_root_redirects_to_site(data_dir):
     assert r.headers["location"] == "/site/index.html"
 
 
-def test_search_requires_no_token(data_dir):
+def test_search_requires_token(data_dir):
     from api.main import app
     with TestClient(app) as c:
-        r = c.get("/search", params={"q": "nope"})
+        assert c.get("/search", params={"q": "nope"}).status_code == 401
+        r = c.get("/search", params={"q": "nope"}, headers={"X-Brain-Token": "test-token"})
     assert r.status_code == 200
     assert r.json() == []
 
@@ -47,8 +48,9 @@ def test_search_modes(data_dir):
     store.write_md(store.raw_dir("heli") / "lift.md", {"title": "양력 백과"}, "양력은 날개가 만드는 힘이다. " * 5)
     index.rebuild()
     with TestClient(app) as c:
-        fts = c.get("/search", params={"q": "양력", "mode": "fts"}).json()
-        hyb = c.get("/search", params={"q": "양력"}).json()
+        h = {"X-Brain-Token": "test-token"}
+        fts = c.get("/search", params={"q": "양력", "mode": "fts"}, headers=h).json()
+        hyb = c.get("/search", params={"q": "양력"}, headers=h).json()
     assert fts and {"slug", "path", "snippet", "score"} <= set(fts[0])
     assert hyb and {"slug", "path", "snippet", "score", "via"} <= set(hyb[0])
     assert hyb[0]["via"] == ["fts"]

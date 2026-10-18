@@ -1,14 +1,14 @@
-"""Source excerpts for think prompts (FTS over the volume's raw/notes files)."""
+"""Source excerpts for think prompts (FTS over raw/notes files and quest lessons)."""
 import os
 import re
 from pathlib import Path
 
-from . import catalog, graph, index, store, vec
-from .config import get_settings
+from . import catalog, graph, index, textutil, vec
 
 
 def _window(body: str, query: str, chars: int) -> str:
-    terms = sorted((t for t in re.findall(r"\w+", query) if len(t) >= 2), key=len, reverse=True)
+    words = textutil.tokens(query) + [t for t in re.findall(r"\w+", query) if len(t) >= 2]
+    terms = sorted(dict.fromkeys(words), key=len, reverse=True)
     pos = next((p for p in (body.find(t) for t in terms) if p >= 0), -1)
     if pos < 0:
         return body[:chars].strip()
@@ -16,19 +16,21 @@ def _window(body: str, query: str, chars: int) -> str:
     return body[start:start + chars].strip()
 
 
-def excerpts(query: str, slug: str | None = None, k: int = 3, chars: int = 400) -> list[dict]:
-    root = get_settings().data_dir / "books"
+def excerpts(query: str, slug: str | None = None, k: int = 3, chars: int = 400,
+             lessons: bool = True) -> list[dict]:
+    """Best FTS passages; ``lessons=False`` skips quest lesson docs (``<slug>/days/day-N.json``)."""
     out = []
     for hit in index.search(query, k * 3):
         path = hit["path"]
         if slug and not (path.startswith(f"{slug}/") or path.startswith(slug + os.sep)):
             continue
-        p = root / path
-        if not p.is_file():
+        if not lessons and index.is_lesson_path(path):
             continue
-        meta, body = store.read_md(p)
-        out.append({"text": _window(body, query, chars), "slug": hit["slug"], "path": path,
-                    "title": str(meta.get("title") or meta.get("source") or Path(path).stem)})
+        doc = index.read_doc(path)
+        if doc is None:
+            continue
+        title, body = doc
+        out.append({"text": _window(body, query, chars), "slug": hit["slug"], "path": path, "title": title})
         if len(out) >= k:
             break
     return out
@@ -40,9 +42,14 @@ RRF_K = 60
 
 
 def _graph_hits(query: str) -> list[dict]:
-    """Lesson/source pages reachable one hop from the nodes whose labels match the query."""
+    """Lesson/source pages one hop from the nodes whose labels match a query word (top 3 per word)."""
     out: list[dict] = []
-    for hit in graph.search_labels(query, 3):
+    seen_nodes, seen_paths = set(), set()
+    words = textutil.tokens(query) or [query]
+    for hit in (h for w in words for h in graph.search_labels(w, 3)):
+        if not hit or hit["id"] in seen_nodes:
+            continue
+        seen_nodes.add(hit["id"])
         for n in graph.neighbors(hit["id"], 1)["nodes"]:
             nid, kind = n["id"], n.get("kind")
             if kind == "lesson":
@@ -50,7 +57,7 @@ def _graph_hits(query: str) -> list[dict]:
                 if len(parts) != 3:
                     continue
                 slug = parts[1]
-                path = f"site/quests/{slug}/{parts[2]}.html"
+                path = f"{slug}/days/{parts[2]}.json"  # same key as the FTS lesson doc
             elif kind == "source" and nid.startswith("src:"):
                 entry = catalog.find_entry_by_prefix(nid[4:])
                 if not entry or not entry.get("book"):
@@ -62,6 +69,9 @@ def _graph_hits(query: str) -> list[dict]:
                 path = f"{slug}/raw/{stem}.md"
             else:
                 continue
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
             out.append({"slug": slug, "path": path, "text": n.get("summary") or "",
                         "title": n.get("label_ko") or nid})
     return out
@@ -85,16 +95,18 @@ def hybrid(query: str, k: int = 10, slug: str | None = None) -> list[dict]:
             row["score"] += 1.0 / (RRF_K + rank)
             if via not in row["via"]:
                 row["via"].append(via)
+            if via == "vec" and h.get("text"):
+                row["_vec_text"] = row.get("_vec_text") or h["text"]
             row["text"] = row["text"] or h.get("snippet") or h.get("text") or ""
             row["title"] = row["title"] or h.get("title") or ""
-    root = get_settings().data_dir / "books"
     for row in fused.values():
-        if not row["title"]:
-            p = root / row["path"]
-            if p.is_file():
-                meta, _ = store.read_md(p)
-                row["title"] = str(meta.get("title") or meta.get("source") or "")
-            row["title"] = row["title"] or Path(row["path"]).stem
+        vec_text = row.pop("_vec_text", "")
+        # FTS snippets are a dozen trigram tokens with <mark>s: prefer the vec chunk or a real window
+        doc = None if (vec_text and row["title"]) else index.read_doc(row["path"])
+        if doc:
+            row["title"] = row["title"] or doc[0]
+        row["text"] = vec_text or (_window(doc[1], query, 400) if doc else "") or row["text"]
+        row["title"] = row["title"] or Path(row["path"]).stem
         row["snippet"] = row["text"]
     ranked = sorted(fused.values(), key=lambda r: (-r["score"], r["slug"], r["path"]))
     return ranked[:k]

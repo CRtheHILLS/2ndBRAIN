@@ -180,3 +180,13 @@ def test_start_omits_days_when_none(monkeypatch):
         ("POST", "/quests"): {"slug": "a", "status": "queued", "url": "/u"}}))
     learn_cli.main(BASE + ["start", "x", "--no-watch"])
     assert "days" not in calls[0][4]
+
+
+def test_start_without_level_lets_server_read_sentence_and_url_fallback(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(learn_cli, "fetch_json", _fake(calls, {
+        ("POST", "/quests"): {"slug": "heli", "status": "queued", "existing": False}}))
+    code = learn_cli.main(BASE + ["start", "헬리콥터 전문가 수준으로 배우고 싶어", "--no-watch"])
+    out = capsys.readouterr().out
+    assert code == 0 and calls[0][4] == {"sentence": "헬리콥터 전문가 수준으로 배우고 싶어"}
+    assert "http://x/site/quests/heli/index.html" in out

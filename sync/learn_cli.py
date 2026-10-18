@@ -177,7 +177,9 @@ def _watch(ctx, slug, interval):
 
 
 def cmd_start(ctx, ns):
-    body = {"sentence": ns.sentence, "level": ns.level}
+    body = {"sentence": ns.sentence}
+    if ns.level is not None:  # omitted: the server reads the level from the sentence (기본 초등)
+        body["level"] = ns.level
     if ns.days is not None:
         body["days"] = ns.days
     r = ctx.call("POST", "/quests", json_body=body)
@@ -186,7 +188,8 @@ def cmd_start(ctx, ns):
         return 1
     note = " (이미 있던 퀘스트예요)" if r.get("existing") else ""
     print(f"퀘스트: {r['slug']}{note}")
-    print(f"주소: {_full(ctx, r['url'])}")
+    url = r.get("url") or f"/site/quests/{r['slug']}/index.html"
+    print(f"주소: {_full(ctx, url)}")
     if ns.no_watch:
         return 0
     return _watch(ctx, r["slug"], ns.interval)
@@ -292,7 +295,8 @@ def build_parser():
     s = sub.add_parser("start", help="새 퀘스트를 시작하고 끝날 때까지 지켜봐요", description="새 퀘스트를 시작해요.")
     s.add_argument("sentence", help='배우고 싶은 것 한 문장 (예: "헬리콥터 운전 배우고 싶어")')
     s.add_argument("--days", type=int, default=None, help="공부할 일수 (기본: 서버 기본값 7일)")
-    s.add_argument("--level", choices=["초등", "일반", "전문"], default="초등", help="눈높이 (기본: 초등)")
+    s.add_argument("--level", choices=["초등", "일반", "전문"], default=None,
+                   help="눈높이 (기본: 문장에서 읽고, 없으면 초등)")
     s.add_argument("--no-watch", action="store_true", help="시작만 하고 지켜보지 않아요")
     s.add_argument("--interval", type=float, default=10, help="진행 확인 간격(초), 기본 10")
     s.set_defaults(fn=cmd_start)

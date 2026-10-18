@@ -40,12 +40,16 @@
   function setToken(t) { try { localStorage.setItem("brain_token", t); } catch (e) {} }
   function clearToken() { try { localStorage.removeItem("brain_token"); } catch (e) {} }
 
+  // token arrives as #t=<token> (a fragment never reaches server logs); old ?t= links still work
   var params = new URLSearchParams(location.search);
-  if (params.get("t")) {
-    setToken(params.get("t"));
+  var frag = new URLSearchParams(location.hash.replace(/^#/, ""));
+  var given = frag.get("t") || params.get("t");
+  if (given) setToken(given);
+  if (frag.has("t") || params.has("t")) {
     params.delete("t");
-    var qs = params.toString();
-    history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash);
+    frag.delete("t");
+    var qs = params.toString(), hs = frag.toString();
+    history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + (hs ? "#" + hs : ""));
   }
   var token = getToken();
   if (!token) { showNote(NOTICE); return; }

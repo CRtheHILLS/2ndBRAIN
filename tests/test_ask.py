@@ -90,3 +90,50 @@ def test_ask_answer_html_is_sanitized(data_dir, monkeypatch):
     h = r["answer_html"]
     assert "script" not in h and "alert" not in h and "onclick" not in h and "<b>" not in h
     assert "[1]" in h and "[9]" not in h and h.startswith("<p>")
+
+
+def test_ask_zero_citation_vault_answer_retries_with_web(data_dir, monkeypatch):
+    from brain import retrieve
+
+    class TwoStep(FakeThink):
+        def __call__(self, kind, system, user, schema=None, **kw):
+            self.users.append(user)
+            html = "<p>잘 모르겠어요.</p>" if len(self.users) == 1 else "<p>웹에 따르면 [6].</p>"
+            return think.ThinkResult({"answer_html": html, "citations": [], "used_vault_ratio": 0,
+                                      "follow_up_quest": ""}, "fake", "m", 1, 1, 0.0)
+    monkeypatch.setattr(retrieve, "hybrid", lambda q, k=10, slug=None: _hits(5), raising=False)
+    ft, reg = TwoStep(), FakeRegistry()
+    monkeypatch.setattr(think, "think", ft)
+    monkeypatch.setattr(ask, "registry", reg)
+    r = ask.ask("양력이 뭐야")
+    assert len(ft.users) == 2 and reg.searched == 1 and r["web_used"] is True
+    assert "https://w.org/a" in ft.users[1] and "https://w.org/a" not in ft.users[0]
+    assert [c["url"] for c in r["citations"]] == ["https://w.org/a"]
+
+
+def test_ask_end_to_end_finds_vault_lesson_for_korean_question(data_dir, monkeypatch):
+    from brain import index
+    from tests.test_index import _seed_vault
+    _seed_vault()
+    index.rebuild()
+    ft, reg = FakeThink("<p>회전날개 [1].</p>"), FakeRegistry()
+    monkeypatch.setattr(think, "think", ft)
+    monkeypatch.setattr(ask, "registry", reg)
+    r = ask.ask("회전날개는 어떻게 바람을 보내?")
+    assert r["hits"] >= 1 and "부채질" in ft.users[0]
+    assert r["citations"] and r["citations"][0]["slug"] in ("heli", "aero")
+
+
+def test_thin_rule_counts_multichannel_hits():
+    one = {"text": "", "slug": "s", "path": "p", "score": 0.1}
+    assert ask._thin([dict(one, via=["fts"])] * 5) is True
+    assert ask._thin([dict(one, via=["fts", "vec"])] + [dict(one, via=["fts"])] * 4) is True
+    assert ask._thin([dict(one, via=["fts", "vec"])] * 2 + [dict(one, via=["graph"])]) is False
+
+
+def test_graph_hits_search_labels_per_token(data_dir, monkeypatch):
+    from brain import retrieve
+    seen = []
+    monkeypatch.setattr(graph, "search_labels", lambda q, n=3: seen.append((q, n)) or [])
+    retrieve._graph_hits("헬리콥터의 양력은 어떻게 생겨?")
+    assert seen == [("헬리콥터", 3), ("양력", 3), ("생겨", 3)]

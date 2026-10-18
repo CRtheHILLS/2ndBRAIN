@@ -140,7 +140,8 @@ def test_graph_api(data_dir):
     c = TestClient(app)
     h = {"X-Brain-Token": "test-token"}
     graph.ingest_card(_entry())
-    assert c.get("/graph/stats").json()["concepts"] == 2
+    assert c.get("/graph/stats").status_code == 401
+    assert c.get("/graph/stats", headers=h).json()["concepts"] == 2
     assert c.get("/graph?center=중첩").status_code in (401, 403)
     assert c.get("/graph", headers=h).status_code == 400
     assert c.get("/graph?center=중첩", headers=h).json()["center"] == "중첩"
@@ -188,3 +189,24 @@ def test_fallback_field_code_never_overwrites_real(data_dir):
     assert graph.upsert_node("a", "concept", "a", field_code="Z6")["field_code"] == "B4"
     graph.upsert_node("b", "concept", "b", field_code="Z6")
     assert graph.upsert_node("b", "concept", "b", field_code="B4")["field_code"] == "B4"
+
+
+def test_rebuild_skips_torn_log_lines(data_dir, caplog):
+    graph.upsert_node("c:a", "concept", "가")
+    with graph._log_path().open("a", encoding="utf-8") as f:
+        f.write('{"op": "upsert_node", "id": "c:b"\n')  # torn line (crash mid-write)
+    graph.upsert_node("c:c", "concept", "다")
+    with caplog.at_level("WARNING"):
+        graph.rebuild()
+    assert graph.get_node("c:a") and graph.get_node("c:c")
+    assert any("not JSON" in r.message for r in caplog.records)
+
+
+def test_db_schema_runs_once_per_path(data_dir, monkeypatch):
+    from brain import db, vec
+    db.connect().close()
+    calls = []
+    monkeypatch.setattr(vec, "ensure_tables", lambda con: calls.append(1) or True)
+    for _ in range(3):
+        db.connect().close()
+    assert calls == []

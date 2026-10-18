@@ -35,6 +35,21 @@ def ensure_tables(con) -> bool:
     return AVAILABLE
 
 
+def load_extension(con) -> None:
+    """Load sqlite-vec into one more connection (the tables already exist)."""
+    if not AVAILABLE:
+        return
+    try:
+        import sqlite_vec
+        con.enable_load_extension(True)
+        try:
+            sqlite_vec.load(con)
+        finally:
+            con.enable_load_extension(False)
+    except Exception as e:
+        log.debug("sqlite-vec load failed: %s", e)
+
+
 def _blob(v: list[float]) -> bytes:
     import sqlite_vec
     return sqlite_vec.serialize_float32(v)

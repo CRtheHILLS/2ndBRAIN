@@ -1,4 +1,5 @@
 import httpx
+import pytest
 import respx
 
 from brain.connectors import arxiv, base, openalex, pubmed, registry, semanticscholar, wikipedia
@@ -302,3 +303,72 @@ def test_vault_fetch_returns_none_on_bad_file(data_dir):
     (d / "bad.md").write_bytes(b"---\n: [unclosed\n---\n\xff\xfe body")
     c = Candidate(url="vault://qm/notes/bad.md", title="t", kind="textbook", connector="vault")
     assert vault.fetch(c) is None
+
+
+@respx.mock
+def test_xai_search_records_usage_to_daily_file_and_quest_log(data_dir, monkeypatch):
+    import json as _json
+    from brain import quest, quest_stages, think
+    _set_xai_key(monkeypatch, "k")
+    respx.post("https://api.x.ai/v1/responses").mock(return_value=httpx.Response(200, json={
+        "model": "grok-fast", "usage": {"input_tokens": 1_000_000, "output_tokens": 2_000_000},
+        "output": [{"type": "message", "content": [{"type": "output_text", "text": "[]"}]}]}))
+    slug = quest.create("헬리콥터")["slug"]
+    monkeypatch.setattr(xai_search, "CURRENT_LOG", quest.quest_dir(slug) / "log.jsonl")
+    xai_search.search("q", "ko", 2)
+    daily = [_json.loads(x) for x in think._usage_path().read_text("utf-8").splitlines()]
+    assert daily == [dict(daily[0], kind="search", provider="xai", model="grok-fast",
+                          **{"in": 1_000_000, "out": 2_000_000})]
+    assert think.daily_count() == 0  # search rows do not eat the think cap
+    assert quest_stages._estimate_cost(slug) == round(0.2 + 2 * 0.5, 4)
+
+
+def _fake_dns(monkeypatch, table):
+    """Real is_public_url resolution path with a patched socket.getaddrinfo."""
+    import socket as _socket
+    from brain.connectors import base
+
+    def gai(host, port, *a, **k):
+        if host not in table:
+            raise _socket.gaierror("no such host")
+        fam = _socket.AF_INET6 if ":" in table[host] else _socket.AF_INET
+        return [(fam, _socket.SOCK_STREAM, 6, "", (table[host], port))]
+    monkeypatch.setattr(base, "_getaddrinfo", base._system_getaddrinfo)
+    monkeypatch.setattr(_socket, "getaddrinfo", gai)
+
+
+def test_is_public_url_rejects_private_targets(monkeypatch):
+    from brain.connectors import base
+    _fake_dns(monkeypatch, {"ok.org": "93.184.216.34", "lan.org": "192.168.0.10", "ten.org": "10.1.2.3",
+                            "corp.org": "172.20.0.1", "meta.org": "169.254.169.254", "lo.org": "127.0.0.1",
+                            "ula.org": "fd00::1", "lo6.org": "::1", "mapped.org": "::ffff:10.0.0.1"})
+    assert base.is_public_url("https://ok.org/a") and base.is_public_url("http://ok.org:8080/")
+    for bad in ("http://lan.org/", "http://ten.org/", "http://corp.org/", "http://meta.org/latest",
+                "http://lo.org/", "http://ula.org/", "http://lo6.org/", "http://mapped.org/",
+                "http://localhost:8000/", "http://api.railway.internal/", "http://db.internal/",
+                "ftp://ok.org/", "file:///etc/passwd", "http://unknown.org/", "http://ok.org:99999/"):
+        assert not base.is_public_url(bad), bad
+
+
+@respx.mock
+def test_http_get_and_download_refuse_private_and_private_redirects(monkeypatch):
+    from brain.connectors import base
+    _fake_dns(monkeypatch, {"ok.org": "93.184.216.34", "lan.org": "192.168.0.10"})
+    base.close_client()
+    try:
+        with pytest.raises(ValueError, match="비공개 주소"):
+            base.http_get("http://lan.org/x")
+        with pytest.raises(ValueError, match="비공개 주소"):
+            base.http_download("http://lan.org/x", 100)
+        respx.get("https://ok.org/r").mock(return_value=httpx.Response(
+            302, headers={"location": "http://lan.org/secret"}))
+        secret = respx.get("http://lan.org/secret").mock(return_value=httpx.Response(200, text="s"))
+        with pytest.raises(ValueError, match="비공개 주소"):
+            base.http_get("https://ok.org/r")
+        with pytest.raises(ValueError, match="비공개 주소"):
+            base.http_download("https://ok.org/r", 100)
+        assert not secret.called
+        respx.get("https://ok.org/fine").mock(return_value=httpx.Response(200, text="좋아요"))
+        assert base.http_get("https://ok.org/fine").text == "좋아요"
+    finally:
+        base.close_client()

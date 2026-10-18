@@ -39,3 +39,9 @@ def test_archive_calls_render_brain_page(monkeypatch):
     except RuntimeError:
         pass
     assert calls == ["quest", "shelf", "brain"]
+
+
+def test_graph_page_reads_token_from_fragment_and_strips_query(data_dir):
+    html = render.render_brain_page().read_text("utf-8")
+    assert 'location.hash.replace(/^#/, "")' in html and 'frag.get("t")' in html
+    assert 'params.delete("t")' in html  # old ?t= links still work, then vanish from the URL

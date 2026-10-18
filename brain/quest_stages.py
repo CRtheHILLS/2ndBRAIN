@@ -5,15 +5,13 @@ Each stage loads/saves quest.json itself and routes every think call through
 """
 import json
 import logging
+import os
 import re
 import time
 
-from . import catalog, graph, index, levels, models, prompts, quest, render, store, think
+from . import catalog, graph, index, levels, models, prompts, quest, render, store, textutil, think
 
 log = logging.getLogger(__name__)
-
-_PARTICLES = re.compile(r"(에서|으로|을|를|이|가|은|는|의|에|로|와|과|도)$")
-_STOPWORDS = {"배우고", "싶어", "이해하고", "알고", "공부하자", "가르쳐", "줘", "나", "저", "완벽히", "확실히"}
 
 
 class _ParkedInCatalog(think.ThinkUnavailable):
@@ -26,14 +24,7 @@ class _ParkedInCatalog(think.ThinkUnavailable):
 
 # --- plan -------------------------------------------------------------------
 
-def _tokens(sentence: str) -> list[str]:
-    out = []
-    for tok in re.findall(r"\w+", sentence):
-        stripped = _PARTICLES.sub("", tok)
-        tok = stripped if len(stripped) >= 2 else tok
-        if len(tok) >= 2 and tok not in _STOPWORDS and tok not in out:
-            out.append(tok)
-    return out
+_tokens = textutil.tokens  # kept as a module alias for older callers
 
 
 def _plan_user(q: dict) -> str:
@@ -146,9 +137,10 @@ _KIND_KO = {"skill": "몸으로 익히는 기술", "topic": "이해하고 싶은
 
 def _dot_excerpts(slug: str, dot: dict) -> list[str]:
     from . import retrieve  # local: keeps this file's import line untouched for parallel tasks
-    hits = retrieve.excerpts(dot["concept_ko"], slug, k=3)
+    # lessons=False: the quest's own (earlier) lessons are not evidence for its new lessons
+    hits = retrieve.excerpts(dot["concept_ko"], slug, k=3, lessons=False)
     if not hits and dot.get("concept_en"):
-        hits = retrieve.excerpts(dot["concept_en"], slug, k=3)
+        hits = retrieve.excerpts(dot["concept_en"], slug, k=3, lessons=False)
     return [f"   [출처: {h['title']}] {' '.join(h['text'].split())}" for h in hits]
 
 
@@ -243,7 +235,9 @@ def stage_teach(slug: str) -> None:
             _link_lesson(slug, plan["title_ko"], lesson)
             p = quest.quest_dir(slug) / "days" / f"day-{n}.json"
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps(lesson, ensure_ascii=False, indent=2), "utf-8")
+            tmp = p.with_suffix(".json.tmp")  # atomic: readers never see a half-written lesson
+            tmp.write_text(json.dumps(lesson, ensure_ascii=False, indent=2), "utf-8")
+            os.replace(tmp, p)
             render.render_quest_day(slug, n)
             quest.log(slug, event="teach_day", day=n, dots=len(lesson["dots"]))
         elif not (store.site_dir() / "quests" / slug / f"day-{n}.html").exists():
@@ -327,6 +321,9 @@ def _stage_archive(slug: str) -> None:
     try:
         from . import vec
         vec.index_book(slug)
+        for qslug, path, body in index.lesson_docs():  # lessons are searchable by meaning too
+            if qslug == slug:
+                vec.index_doc(slug, path, body)
     except Exception as e:
         log.warning("vec.index_book failed: %s", e)
     render_quest = getattr(render, "render_quest", None)  # added by the render task

@@ -138,3 +138,11 @@ def test_resume_resets_time_budget_only_for_time_failures(client, started):
     quest.save(slug, q)
     client.post(f"/quests/{slug}/resume", headers=H)
     assert quest.load(slug)["budget"]["seconds"] == 77.0
+
+
+def test_quest_create_validates_days_and_sentence_length(client):
+    for body in ({"sentence": "헬리콥터", "days": 0}, {"sentence": "헬리콥터", "days": 31},
+                 {"sentence": "가" * 601}, {"sentence": "가"}):
+        assert client.post("/quests", headers=H, json=body).status_code == 422, body
+    assert client.post("/quests", headers=H, json={"sentence": "헬리콥터", "days": 30}).status_code == 200
+    assert client.get("/quests", headers={"X-Brain-Token": "test-tokenX"}).status_code == 401

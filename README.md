@@ -88,7 +88,7 @@ brain-learn ask "질문"                  # 내 지식 창고에서 먼저 찾�
 | POST | `/upload` | `X-Brain-Token` | 파일 업로드 (`book`, `file` 폼 데이터) |
 | POST | `/books/{slug}/process?level=` | `X-Brain-Token` | 증류(distill) + 렌더링 + 검색 인덱스 재구축 |
 | GET | `/books` | - | 등록된 책 목록 |
-| GET | `/search?q=&k=` | - | 전체 책에서 검색 |
+| GET | `/search?q=&k=&mode=` | `X-Brain-Token` | 전체 책·수업에서 검색 (임베딩 비용이 들어 토큰 필요) |
 | GET | `/site/*` | - | 생성된 정적 HTML 페이지 (뷰어) |
 
 ## Railway 배포

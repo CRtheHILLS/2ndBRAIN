@@ -86,3 +86,28 @@ def test_vault_source_url_from_raw_frontmatter(data_dir):
     _, f = _zip()
     assert "https://ex.org/a" in f["vault/자료/src-" + eid[:16] + ".md"]
     assert "https://ex.org/a" in next(v for k, v in f.items() if k.endswith("/개념.md"))
+
+
+def test_vault_book_with_lesson_member_exports(data_dir):
+    graph.upsert_node("lift", "concept", "양력", "lift", field_code="A1")
+    graph.upsert_node("rotor", "concept", "회전날개", field_code="A1")
+    graph.upsert_node("src:abc123", "source", "항공 입문")
+    graph.add_edge("src:abc123", "lift", "about")
+    graph.upsert_node("book:heli", "book", "heli")
+    graph.add_edge("src:abc123", "book:heli", "in_book")
+    graph.upsert_node("lesson:heli:day-1", "lesson", "헬리 Day 1")
+    graph.add_edge("rotor", "lesson:heli:day-1", "taught_in")
+    graph.add_edge("lesson:heli:day-1", "book:heli", "in_book")
+    _, f = _zip()
+    b = f["vault/서재/heli.md"]
+    assert "[[퀘스트/heli/day-1]]" in b and "[[src-abc123]]" in b
+    assert "[[회전날개]]" in b and "[[양력]]" in b
+    assert "lesson" not in b.split("## 수업")[0]  # lessons are not listed as sources
+
+
+def test_vault_stem_strips_obsidian_link_breakers(data_dir):
+    graph.upsert_node("c:arr", "concept", "[배열]#1^a|b", field_code="")
+    _, f = _zip()
+    name = next(n for n in f if 'id: "c:arr"' in f[n])
+    stem = name.rsplit("/", 1)[1][:-3]
+    assert not any(ch in stem for ch in "[]#^|") and "배열" in stem

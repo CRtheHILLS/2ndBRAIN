@@ -164,7 +164,15 @@ def _vector_ids(nid: str) -> list[str]:
         hits = vec.similar_nodes(node_id=nid, k=5)
     except Exception:  # noqa: BLE001
         return []
-    return [h.get("id") if isinstance(h, dict) else str(h) for h in hits or []]
+    out = []
+    for h in hits or []:  # vec.similar_nodes returns (id, distance) tuples
+        if isinstance(h, dict):
+            out.append(h.get("id"))
+        elif isinstance(h, (tuple, list)) and h:
+            out.append(str(h[0]))
+        else:
+            out.append(str(h))
+    return [i for i in out if i and i != nid]
 
 
 def candidates(node_id: str, limit: int = 8) -> list[dict]:

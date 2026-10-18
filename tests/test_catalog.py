@@ -462,3 +462,9 @@ def test_after_learn_leaves_quest_books_to_the_bridge_stage(data_dir, monkeypatc
              "concept_pairs": [{"ko": "자이로스코프", "en": "Gyroscope"}]}
     assert catalog._after_learn([entry]) == ["gyroscope"]
     assert seen == []
+
+
+def test_catalog_card_summary_and_domain_have_defaults():
+    from brain import models
+    c = models.CatalogCard(index=1, title="제목")
+    assert c.summary == "" and c.domain == "기타"

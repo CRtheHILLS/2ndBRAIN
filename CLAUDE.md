@@ -24,7 +24,7 @@ CR에게 보이는 말은 전부 한국어로 해요.
 - editable install이 없을 수 있으니 `.venv/Scripts/python -m sync.learn_cli <명령>`으로 실행해요.
   (설치돼 있으면 `brain-learn <명령>`도 같아요.)
 - 서버 주소와 토큰은 CLI가 프로젝트 루트의 `.env`(`BRAIN_URL`, `BRAIN_TOKEN`)에서 직접 읽어요. 프로젝트 루트에서 위 명령만 치면 되고, 따로 불러올 필요가 없어요. 토큰을 채팅이나 파일에 적지 않아요.
-  토큰을 채팅이나 파일에 적지 않아요.
+- 두뇌 그래프 링크는 `/site/brain/index.html#t=<토큰>` 꼴이에요(`#` 뒤는 서버 기록에 남지 않아요). 한 번 열면 브라우저에 저장돼요.
 - 명령: `start · status · watch · tasks · submit · list · resume · rerender · ask`
 - 종료 코드: 완료 0 · 실패 1 · 사용법 오류 2 · 생각 담당 필요 3.
 - 파이썬은 항상 `python`만 쓰고, 콘솔은 `PYTHONIOENCODING=utf-8`로 해요.

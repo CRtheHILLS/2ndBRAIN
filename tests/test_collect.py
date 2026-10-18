@@ -140,3 +140,16 @@ def test_collect_quest_stops_at_max_sources(data_dir, monkeypatch):
     assert len(list(store.raw_dir(q["slug"]).glob("*.md"))) == 3
     assert ledger.new_connectors_tried == ["wikipedia"]
     assert quest.load_ledger(q["slug"]).new_connectors_tried == ["wikipedia"]
+
+
+def test_run_dot_calls_xai_once_first_korean_query_only(data_dir, monkeypatch):
+    calls = []
+
+    def search_all(query, lang, limit_per=5, names=None, timeout=25):
+        calls.append((query, lang, None if names is None else "xai" in names))
+        return [], {}
+    monkeypatch.setattr(registry, "search_all", search_all)
+    dot = models.Dot(concept_ko="얽힘", queries_ko=["얽힘", "양자 얽힘"], queries_en=["entanglement", "EPR"])
+    collect.run_dot("quest-t", 1, dot, 2, models.SourceLedger(), set())
+    assert calls[0] == ("얽힘", "ko", None)  # all connectors, xai included
+    assert all(x is False for _, _, x in calls[1:]) and len(calls) == 4
