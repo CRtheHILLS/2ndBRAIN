@@ -18,10 +18,13 @@ def search(query: str, lang: str, limit: int) -> list[Candidate]:
 def fetch(c: Candidate) -> Doc | None:
     rel = c.url.removeprefix("vault://")
     root = (get_settings().data_dir / "books").resolve()
-    path = (root / rel).resolve()
-    if root not in path.parents or not path.is_file():
+    try:
+        path = (root / rel).resolve()
+        if root not in path.parents or not path.is_file():
+            return None
+        _, body = store.read_md(path)
+    except Exception:
         return None
-    _, body = store.read_md(path)
     return Doc(url=c.url, title=c.title, text=body, kind="textbook", connector="vault")
 
 

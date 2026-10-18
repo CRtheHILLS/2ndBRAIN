@@ -32,13 +32,21 @@ def all_connectors() -> dict[str, Connector]:
 def fetch(c: Candidate) -> Doc | None:
     from . import vault, webpage, youtube
 
-    if youtube.video_id(c.url):
-        return youtube.fetch(c)
-    if c.url.startswith("vault://"):
-        return vault.fetch(c)
-    conn = all_connectors().get(c.connector)
-    doc = conn.fetch(c) if conn else None
-    return doc or webpage.fetch_url(c.url)
+    try:
+        if youtube.video_id(c.url):
+            return youtube.fetch(c)
+        if c.url.startswith("vault://"):
+            return vault.fetch(c)
+        conn = all_connectors().get(c.connector)
+        doc = conn.fetch(c) if conn else None
+    except Exception:
+        doc = None
+    if doc:
+        return doc
+    try:
+        return webpage.fetch_url(c.url)
+    except Exception:
+        return None
 
 
 def _describe(exc: Exception) -> str:

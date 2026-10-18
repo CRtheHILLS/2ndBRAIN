@@ -12,20 +12,19 @@ from .base import Candidate, Doc
 
 
 def download(url: str, max_bytes: int = 15_000_000) -> tuple[bytes, str]:
-    r = base.http_get(url, timeout=30)
-    return r.content[:max_bytes], r.headers.get("content-type", "").lower()
+    return base.http_download(url, max_bytes, timeout=30)
 
 
 def extract_html(html: bytes | str, url: str) -> tuple[str, str]:
-    if isinstance(html, bytes):
-        html = html.decode("utf-8", errors="replace")
+    # raw bytes let trafilatura's charset detection handle EUC-KR etc.
     text = trafilatura.extract(html, url=url, include_comments=False) or ""
     title = ""
     meta = trafilatura.extract_metadata(html)
     if meta is not None and meta.title:
         title = meta.title
     if not title:
-        m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
+        s = html if isinstance(html, str) else html.decode("utf-8", errors="replace")
+        m = re.search(r"<title[^>]*>(.*?)</title>", s, re.I | re.S)
         title = m.group(1).strip() if m else ""
     return title, text
 

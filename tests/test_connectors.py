@@ -263,3 +263,42 @@ def test_registry_fetch_routes_youtube_vault_and_fallback(monkeypatch):
     registry.fetch(mk("https://example.com/p", "webpage"))
     assert calls == ["yt", "vault", "web", "web"]
     assert {"webpage", "youtube", "ddgs", "xai", "vault"} <= set(registry.all_connectors())
+
+
+@respx.mock
+def test_download_stops_at_max_bytes_and_rejects_big_content_length():
+    def chunks():
+        for _ in range(100):
+            yield b"x" * 100
+    respx.get("https://example.com/big").mock(return_value=httpx.Response(200, content=chunks()))
+    data, _ = webpage.download("https://example.com/big", max_bytes=500)
+    assert len(data) == 500
+    respx.get("https://example.com/huge").mock(return_value=httpx.Response(
+        200, content=b"abc", headers={"content-length": "999999"}))
+    import pytest
+    with pytest.raises(ValueError):
+        webpage.download("https://example.com/huge", max_bytes=500)
+
+
+def test_registry_fetch_never_raises_and_falls_back(monkeypatch):
+    class Boom:
+        name = "boom"
+        def fetch(self, c):
+            raise RuntimeError("x")
+    monkeypatch.setattr(registry, "all_connectors", lambda: {"boom": Boom()})
+    c = Candidate(url="https://example.com/p", title="x", kind="web", connector="boom")
+    monkeypatch.setattr(webpage, "fetch_url", lambda url, max_pages=None: Doc(url=url, title="w", text="t"))
+    assert registry.fetch(c).title == "w"
+
+    def bad(url, max_pages=None):
+        raise RuntimeError("y")
+    monkeypatch.setattr(webpage, "fetch_url", bad)
+    assert registry.fetch(c) is None
+
+
+def test_vault_fetch_returns_none_on_bad_file(data_dir):
+    d = data_dir / "books" / "qm" / "notes"
+    d.mkdir(parents=True)
+    (d / "bad.md").write_bytes(b"---\n: [unclosed\n---\n\xff\xfe body")
+    c = Candidate(url="vault://qm/notes/bad.md", title="t", kind="textbook", connector="vault")
+    assert vault.fetch(c) is None
