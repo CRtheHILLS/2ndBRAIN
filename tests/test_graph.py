@@ -114,7 +114,7 @@ def test_ingest_card_links_source_book_concepts(data_dir):
     assert graph.get_node("book:cosmos")["kind"] == "book"
     rel = graph.neighbors("quantum-entanglement", rels=["related"])["edges"]
     assert len(rel) == 1 and rel[0]["weight"] == 1.0
-    assert graph.node_ids_in_book("cosmos") == ["src:" + "ab" * 8]
+    assert graph.node_ids_in_book("cosmos", kind="source") == ["src:" + "ab" * 8]
     assert graph.ingest_card(_entry(id="cd" * 32)) == []
     assert graph.neighbors("중첩", rels=["related"])["edges"][0]["weight"] == 2.0
 
@@ -148,3 +148,43 @@ def test_graph_api(data_dir):
     assert len(c.get("/graph?field=B4", headers=h).json()["nodes"]) >= 2
     assert len(c.get("/graph/full", headers=h).json()["nodes"]) == 4
     assert c.post("/graph/rebuild", headers=h).json()["replayed"] > 0
+
+
+def test_edge_written_before_redirect_is_reachable(data_dir):
+    for i in ("x", "old", "new"):
+        graph.upsert_node(i, "concept", i)
+    graph.add_edge("x", "old", "related")
+    graph.redirect("old", "new")
+    nb = graph.neighbors("new")
+    assert {n["id"] for n in nb["nodes"]} == {"new", "x"}
+    assert [(e["src"], e["dst"]) for e in nb["edges"]] == [("x", "new")]
+    assert graph.get_node("old")["id"] == "new"
+    graph.upsert_node("old", "concept", "다시")
+    assert graph.get_node("new")["label_ko"] == "다시"
+    graph.add_edge("old", "x", "requires")
+    assert {(e["src"], e["dst"]) for e in graph.neighbors("new", rels=["requires"])["edges"]} == {("new", "x")}
+
+
+def test_node_ids_in_book_includes_concepts_and_filters_kind(data_dir):
+    graph.ingest_card(_entry())
+    graph.ingest_card(_entry(id="ef" * 32, book="other", concepts=["다른"],
+                             concept_pairs=[{"ko": "다른", "en": ""}]))
+    src = "src:" + "ab" * 8
+    assert graph.node_ids_in_book("cosmos") == sorted([src, "quantum-entanglement", "중첩"])
+    assert graph.node_ids_in_book("cosmos", kind="concept") == ["quantum-entanglement", "중첩"]
+    assert graph.node_ids_in_book("cosmos", kind="source") == [src]
+
+
+def test_book_title_cannot_steal_concept_alias(data_dir):
+    graph.upsert_node("cosmos-concept", "concept", "코스모스")
+    graph.upsert_node("book:코스모스", "book", "코스모스")
+    graph.upsert_node("src:1", "source", "코스모스")
+    graph.add_alias("코스모스", "src:1")
+    assert graph.find_alias("코스모스") == "cosmos-concept"
+
+
+def test_fallback_field_code_never_overwrites_real(data_dir):
+    graph.upsert_node("a", "concept", "a", field_code="B4")
+    assert graph.upsert_node("a", "concept", "a", field_code="Z6")["field_code"] == "B4"
+    graph.upsert_node("b", "concept", "b", field_code="Z6")
+    assert graph.upsert_node("b", "concept", "b", field_code="B4")["field_code"] == "B4"

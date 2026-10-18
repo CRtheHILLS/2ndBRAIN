@@ -19,6 +19,8 @@ RELS = ("is_a", "part_of", "requires", "related", "bridge", "contradicts", "cite
         "about", "in_book", "taught_in", "asked")
 KINDS = ("concept", "source", "lesson", "quest", "book", "person", "place", "work", "question")
 
+ALIAS_KINDS = ("concept", "person", "place", "work")  # kinds whose labels are canonical aliases
+
 _NODE_COLS = ("id", "kind", "label_ko", "label_en", "wikidata", "field_code", "summary",
               "created_at", "updated_at")
 _EDGE_COLS = ("src", "dst", "rel", "weight", "reason", "evidence", "created_at")
@@ -57,10 +59,12 @@ def _apply(ev: dict, con) -> None:
             con.execute("INSERT INTO nodes VALUES (?,?,?,?,?,?,?,?,?)", (ev["id"], *new, t, t))
         else:
             merged = [n or o for n, o in zip(new, row)]
+            if new[4] == frame.FALLBACK_CODE and row[4]:  # never replace a real code with Z6
+                merged[4] = row[4]
             con.execute("UPDATE nodes SET kind=?, label_ko=?, label_en=?, wikidata=?, "
                         "field_code=?, summary=?, updated_at=? WHERE id=?", (*merged, t, ev["id"]))
     elif op == "alias":
-        con.execute("INSERT OR REPLACE INTO aliases VALUES (?,?)", (_norm(ev["alias"]), ev["node_id"]))
+        con.execute("INSERT OR IGNORE INTO aliases VALUES (?,?)", (_norm(ev["alias"]), ev["node_id"]))
     elif op == "tag":
         con.execute("INSERT OR IGNORE INTO node_tags VALUES (?,?)", (ev["node_id"], ev["tag"]))
     elif op == "edge":
@@ -93,17 +97,28 @@ def upsert_node(id: str, kind: str, label_ko: str, label_en: str = "", wikidata:
                 field_code: str = "", summary: str = "", tags: Iterable[str] = ()) -> dict:
     if kind not in KINDS:
         raise ValueError(f"unknown kind: {kind}")
+    id = resolve(id)
     evs = [{"op": "node", "id": id, "kind": kind, "label_ko": label_ko, "label_en": label_en,
             "wikidata": wikidata, "field_code": field_code, "summary": summary}]
-    aliases = [label_ko, label_en] + ([f"wd:{wikidata}"] if wikidata else [])
-    evs += [{"op": "alias", "alias": a, "node_id": id} for a in aliases if a and a.strip()]
+    aliases = ([label_ko, label_en] if kind in ALIAS_KINDS else []) + \
+        ([f"wd:{wikidata}"] if wikidata else [])
+    evs += [{"op": "alias", "alias": a, "node_id": id}
+            for a in aliases if a and a.strip() and not _alias_taken(a, id)]
     evs += [{"op": "tag", "node_id": id, "tag": t} for t in tags if t]
     _write(*evs)
     return get_node(id)
 
 
+def _alias_taken(alias: str, node_id: str) -> bool:
+    """True when the alias is already bound (to this or another node): first writer wins."""
+    with closing(db.connect()) as con:
+        return con.execute("SELECT 1 FROM aliases WHERE alias=?", (_norm(alias),)).fetchone() is not None
+
+
 def add_alias(alias: str, node_id: str) -> None:
-    _write({"op": "alias", "alias": alias, "node_id": node_id})
+    node_id = resolve(node_id)
+    if not _alias_taken(alias, node_id):
+        _write({"op": "alias", "alias": alias, "node_id": node_id})
 
 
 def add_edge(src: str, dst: str, rel: str, weight: float = 1.0, reason: str = "",
@@ -178,6 +193,18 @@ def _edge_dicts(rows) -> list[dict]:
     return [dict(zip(_EDGE_COLS, r)) for r in rows]
 
 
+def _group(con, id: str) -> set[str]:
+    """The id plus every id that (transitively) redirects to it."""
+    out, todo = {id}, [id]
+    while todo:
+        cur = todo.pop()
+        for (old,) in con.execute("SELECT old_id FROM redirects WHERE new_id=?", (cur,)):
+            if old not in out:
+                out.add(old)
+                todo.append(old)
+    return out
+
+
 def neighbors(id: str, depth: int = 1, rels: Iterable[str] | None = None) -> dict:
     depth = max(1, min(int(depth), 3))
     rel_set = set(rels) if rels else None
@@ -188,12 +215,15 @@ def neighbors(id: str, depth: int = 1, rels: Iterable[str] | None = None) -> dic
         for _ in range(depth):
             nxt: set[str] = set()
             for nid in frontier:
+                ids = sorted(_group(con, nid))
+                marks = ",".join("?" * len(ids))
                 rows = con.execute(f"SELECT {','.join(_EDGE_COLS)} FROM edges "
-                                   "WHERE src=? OR dst=?", (nid, nid)).fetchall()
+                                   f"WHERE src IN ({marks}) OR dst IN ({marks})", ids + ids).fetchall()
                 for e in _edge_dicts(rows):
                     if rel_set and e["rel"] not in rel_set:
                         continue
-                    edges[(e["src"], e["dst"], e["rel"])] = e
+                    e["src"], e["dst"] = _resolve(con, e["src"]), _resolve(con, e["dst"])
+                    edges.setdefault((e["src"], e["dst"], e["rel"]), e)
                     for end in (e["src"], e["dst"]):
                         if end not in seen:
                             seen.add(end)
@@ -245,11 +275,17 @@ def stats() -> dict:
                 "by_area": dict(sorted(areas.items()))}
 
 
-def node_ids_in_book(slug: str) -> list[str]:
-    """Ids of the source nodes filed under a book."""
+def node_ids_in_book(slug: str, kind: str | None = None) -> list[str]:
+    """Ids attached to a book: its sources/lessons, plus the concepts those are about."""
     with closing(db.connect()) as con:
-        return [r[0] for r in con.execute(
-            "SELECT src FROM edges WHERE dst=? AND rel='in_book' ORDER BY src", (f"book:{slug}",))]
+        members = {_resolve(con, r[0]) for r in con.execute(
+            "SELECT src FROM edges WHERE dst=? AND rel IN ('in_book','taught_in')", (f"book:{slug}",))}
+        about = {_resolve(con, r[0]) for m in members for r in con.execute(
+            "SELECT dst FROM edges WHERE src=? AND rel='about'", (m,))}
+        ids = sorted(members | about)
+        if kind:
+            ids = [i for i in ids if (_node(con, i) or {}).get("kind") == kind]
+        return ids
 
 
 def rebuild() -> int:
@@ -293,6 +329,7 @@ def ingest_card(entry: dict) -> list[str]:
     new: list[str] = []
     for p in pairs:
         cid = _concept_id_fallback(p.get("ko", ""), p.get("en", ""))
+        cid = resolve(cid) if cid else cid
         if not cid or cid in ids:
             continue
         if get_node(cid) is None:
