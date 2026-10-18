@@ -286,7 +286,7 @@ def __getattr__(name: str):
 
 def _summarize(slug: str) -> dict:
     return {
-        "pages": {},
+        "pages": load(slug)["summary"].get("pages") or {},  # filled by the teach stage
         "n_sources": sum(1 for s in load_ledger(slug).sources if s.fetched),
         "n_concepts": len(graph.node_ids_in_book(slug, kind="concept")),
         "bridges": 0,

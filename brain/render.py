@@ -1,7 +1,7 @@
 import json, re, shutil
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from . import llm, store
+from . import llm, models, quest, store
 
 TPL = Path(__file__).parent / "templates"
 env = Environment(loader=FileSystemLoader(TPL), autoescape=select_autoescape(["html"]))
@@ -51,7 +51,84 @@ def render_book(slug: str, default_level: str = "일반", use_cache: bool = True
     out.write_text(env.get_template("page.html.j2").render(book=book, levels=lv, default=default_level), "utf-8")
     _copy_css(); render_shelf(); return out
 
+QUEST_STATUS_KO = {"queued": "시작 대기", "running": "배우는 중", "waiting_thinker": "생각 대기 중",
+                   "done": "끝났어요", "failed": "멈췄어요"}
+
 def render_shelf() -> Path:
+    quests = [{"slug": q["slug"], "title": (q.get("plan") or {}).get("title_ko") or q.get("sentence", q["slug"]),
+               "status": QUEST_STATUS_KO.get(q.get("status"), q.get("status", "")),
+               "created": (q.get("created_at") or "")[:10]} for q in quest.list_quests()]
+    quest_slugs = {q["slug"] for q in quests}  # a quest's book only holds its raw files
+    books = [b for b in store.list_books() if b["slug"] not in quest_slugs]
     out = store.site_dir() / "index.html"
-    out.write_text(env.get_template("shelf.html.j2").render(books=store.list_books()), "utf-8")
+    out.write_text(env.get_template("shelf.html.j2").render(books=books, quests=quests), "utf-8")
     _copy_css(); return out
+
+# --- quest pages --------------------------------------------------------------
+
+_SVG_BAD = re.compile(r"<script|[\s\"'/]on\w+\s*=|href|xlink|<foreignObject|<iframe|javascript:|<style|url\(", re.I)
+
+def _sanitize_svg(svg: str) -> str:
+    s = (svg or "").strip()
+    if "<svg" not in s.lower() or _SVG_BAD.search(s):
+        return ""
+    return s
+
+def _quest_site(slug: str) -> Path:
+    d = store.site_dir() / "quests" / slug
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+def load_day(slug: str, n: int) -> dict | None:
+    """The validated DayLesson dict of ``days/day-<n>.json``, or None if missing/invalid."""
+    p = quest.quest_dir(slug) / "days" / f"day-{n}.json"
+    try:
+        return models.DayLesson.model_validate_json(p.read_text("utf-8")).model_dump()
+    except (OSError, ValueError):
+        return None
+
+def _bridges(concept_ids: list[str]) -> list:
+    try:
+        from . import bridge  # Task 15
+        return list(bridge.bridges_for(concept_ids))
+    except Exception:  # noqa: BLE001 - no bridge module yet, or it failed: show the empty state
+        return []
+
+def _day_numbers(plan: dict) -> list[int]:
+    return sorted(d["n"] for d in plan["days"])
+
+def render_quest_day(slug: str, n: int) -> Path:
+    plan = quest.load(slug)["plan"]
+    lesson = load_day(slug, n)
+    if lesson is None:
+        raise FileNotFoundError(f"day-{n}.json 이 없거나 형식이 맞지 않음: {slug}")
+    nums = _day_numbers(plan)
+    i = nums.index(n) if n in nums else -1
+    prev_n = nums[i - 1] if i > 0 else None
+    next_n = nums[i + 1] if 0 <= i < len(nums) - 1 else None
+    for d in lesson["dots"]:
+        d["svg"] = _sanitize_svg(d["picture_svg"])
+    bridges = _bridges([d["concept_id"] for d in lesson["dots"] if d["concept_id"]])
+    out = _quest_site(slug) / f"day-{n}.html"
+    out.write_text(env.get_template("quest_day.html.j2").render(
+        plan=plan, lesson=lesson, n=n, total=len(nums), prev_n=prev_n, next_n=next_n,
+        bridges=bridges), "utf-8")
+    _copy_css(); return out
+
+def render_quest(slug: str) -> Path:
+    q = quest.load(slug)
+    plan = q["plan"]
+    ledger = quest.load_ledger(slug)
+    days, concept_ids = [], []
+    for d in sorted(plan["days"], key=lambda d: d["n"]):
+        lesson = load_day(slug, d["n"])
+        if lesson:
+            concept_ids += [c["concept_id"] for c in lesson["dots"] if c["concept_id"]]
+        days.append({"n": d["n"], "big_idea": d["big_idea"], "ready": lesson is not None,
+                     "one_line": lesson["big_idea_one_line"] if lesson else ""})
+    out = _quest_site(slug) / "index.html"
+    out.write_text(env.get_template("quest_index.html.j2").render(
+        q=q, plan=plan, days=days, n_ready=sum(d["ready"] for d in days),
+        sources=sorted((s for s in ledger.sources if s.fetched), key=lambda s: (s.day, s.dot)),
+        ledger=ledger, bridges=_bridges(list(dict.fromkeys(concept_ids)))), "utf-8")
+    _copy_css(); render_shelf(); return out
