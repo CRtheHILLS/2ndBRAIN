@@ -31,8 +31,9 @@ README = """# 2nd BRAIN 볼트
 이 볼트는 서버에서 만든 사본이에요. 여기서 고쳐도 서버에는 반영되지 않아요.
 """
 
-_BAD = re.compile(r'[\\/:*?"<>|\r\n\t]')
+_BAD = re.compile(r'[\\/:*?"<>|\r\n\t\[\]#^]')  # file-name chars + Obsidian link breakers [ ] # ^ |
 SHOWN_RELS = ("bridge", "requires", "is_a", "related")
+_LESSON = re.compile(r"^lesson:(.+):day-(\d+)$")
 
 
 def _clean(name: str) -> str:
@@ -135,12 +136,15 @@ def build_zip() -> bytes:
     entries = {e["id"][:16]: e for e in catalog.learned() if e.get("id")}
 
     def src_stem(nid: str) -> str:
-        return source_stem[nid]
+        return source_stem.get(nid) or _clean(nid.replace(":", "-"))
 
     about: dict[str, list[str]] = {}
+    taught: dict[str, list[str]] = {}  # lesson id -> concept ids (taught_in: concept -> lesson)
     for e in edges:
         if e["rel"] == "about" and e["dst"] in stem and by_id.get(e["src"], {}).get("kind") == "source":
             about.setdefault(e["src"], []).append(e["dst"])
+        elif e["rel"] == "taught_in" and e["src"] in stem:
+            taught.setdefault(e["dst"], []).append(e["src"])
     sources_of: dict[str, list[str]] = {}
     for sid, cids in about.items():
         for c in cids:
@@ -153,7 +157,7 @@ def build_zip() -> bytes:
         try:
             raw = catalog._raw_path(e) if (e.get("path") or e.get("book")) else None
             src = str(store.read_md(raw)[0].get("source") or "").strip() if raw else ""
-        except (OSError, ValueError, KeyError):
+        except Exception:  # a broken entry never breaks the export
             return ""
         return src if src.startswith("http") else ""
 
@@ -273,10 +277,14 @@ def build_zip() -> bytes:
         if not slug:
             continue
         mem = sorted(book_members.get(slug, []))
-        cs = sorted({c for m in mem for c in about.get(m, [])})
-        b = [f"# {titles.get(slug, slug)}", "", "## 자료",
-             *[f"- [[{src_stem(m)}]]" for m in mem], "", "## 개념",
-             *[f"- {link(c)}" for c in cs], ""]
+        srcs = [m for m in mem if by_id.get(m, {}).get("kind") == "source"]
+        lessons = [m for m in mem if _LESSON.match(m)]
+        cs = sorted({c for m in srcs for c in about.get(m, [])} | {c for m in lessons for c in taught.get(m, [])})
+        b = [f"# {titles.get(slug, slug)}", "", "## 자료", *[f"- [[{src_stem(m)}]]" for m in srcs], ""]
+        if lessons:
+            les = sorted((_LESSON.match(m).group(1), int(_LESSON.match(m).group(2))) for m in lessons)
+            b += ["## 수업", *[f"- [[퀘스트/{s}/day-{d}]]" for s, d in les], ""]
+        b += ["## 개념", *[f"- {link(c)}" for c in cs], ""]
         files[f"vault/서재/{book_stem[slug]}.md"] = "\n".join(b).rstrip() + "\n"
 
     buf = io.BytesIO()
