@@ -189,3 +189,24 @@ def test_fallback_field_code_never_overwrites_real(data_dir):
     assert graph.upsert_node("a", "concept", "a", field_code="Z6")["field_code"] == "B4"
     graph.upsert_node("b", "concept", "b", field_code="Z6")
     assert graph.upsert_node("b", "concept", "b", field_code="B4")["field_code"] == "B4"
+
+
+def test_rebuild_skips_torn_log_lines(data_dir, caplog):
+    graph.upsert_node("c:a", "concept", "가")
+    with graph._log_path().open("a", encoding="utf-8") as f:
+        f.write('{"op": "upsert_node", "id": "c:b"\n')  # torn line (crash mid-write)
+    graph.upsert_node("c:c", "concept", "다")
+    with caplog.at_level("WARNING"):
+        graph.rebuild()
+    assert graph.get_node("c:a") and graph.get_node("c:c")
+    assert any("not JSON" in r.message for r in caplog.records)
+
+
+def test_db_schema_runs_once_per_path(data_dir, monkeypatch):
+    from brain import db, vec
+    db.connect().close()
+    calls = []
+    monkeypatch.setattr(vec, "ensure_tables", lambda con: calls.append(1) or True)
+    for _ in range(3):
+        db.connect().close()
+    assert calls == []

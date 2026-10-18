@@ -5,7 +5,7 @@
 - [ ] **첫 퀘스트 피드백 받기:** 창세기 1장 창조론 7일 — 지도: https://2ndbrain-production-4ab7.up.railway.app/site/quests/quest-20261018-창세기-1장-창조론을-과학-고고학-역사-증거와-현재까지의-모든-논란-이슈/index.html (45 자료 · 29 점 · 162 개념 · 비용 ≈ $0.01 · 16분). 수동 `POST /graph/rebridge?limit=100` 후 다리 39개 — 예: Day 3 '열역학 창조론 논증 ↔ 열역학(양자역학에서 배움)', Day 4 '빅뱅 우주론 ↔ 우주론'. 어느 부분이 아직 어려웠는지 → `rerender` 또는 프롬프트 보강
   - 알려진 다듬을 점: 날마다 말투가 "~요"/"~이다"로 섞임 → teach 프롬프트에 존댓말 한 가지로 고정; 출처 링크가 "[1]"로만 보임 → 제목 표시
 - [ ] **분류 백로그 958건** (비숑 272·손자병법 300·장수마을 138·인간관계론 154·THE-MIND 86…): `POST /catalog/learn?limit=25&book=<책>` 반복. Gemini 무료 한도·일일 상한(THINK_DAILY_CAP=200) 안에서 하루 2~3권씩. 분류될수록 다리(bridge)가 저절로 늘어남
-- [ ] **두뇌 그래프 링크 CR에게 주기:** `/site/brain/index.html?t=<BRAIN_TOKEN>` (한 번 열면 브라우저에 저장). Obsidian: `GET /vault.zip` (토큰) → 압축 풀고 Obsidian에서 폴더 열기
+- [ ] **두뇌 그래프 링크 CR에게 주기:** `/site/brain/index.html#t=<BRAIN_TOKEN>` (한 번 열면 브라우저에 저장, `#` 뒤라 서버 기록에 안 남음). Obsidian: `GET /vault.zip` (토큰) → 압축 풀고 Obsidian에서 폴더 열기
 - [ ] Railway `railway.json` config-as-code 2026-12-01까지 마이그레이션(`railway config migrate`)
 - [ ] 로컬: `pip install -e .`를 다시 해 두었음(`brain-sync`, `brain-learn` 명령 사용 가능). 깃 `main`에 병합했으나 **origin에 push는 안 함**(CR 결정 필요)
 - 사용법 요약: 한 문장("…배우고 싶어") → Clair가 `/learn` 스킬 → `python -m sync.learn_cli start/watch`. 생각 담당(모델) 전부 실패 시 서버가 30분마다 재시도, 세션이 있으면 Clair가 과제를 직접 풀어 `submit`. README "학습 퀘스트" 절 참고

@@ -1,5 +1,6 @@
 """The one place that opens ``brain.db`` (FTS index + knowledge-graph tables)."""
 import sqlite3
+import threading
 
 from .config import get_settings
 
@@ -20,18 +21,26 @@ CREATE INDEX IF NOT EXISTS idx_nodes_field ON nodes(field_code);
 CREATE INDEX IF NOT EXISTS idx_nodes_kind ON nodes(kind);
 """
 
-_wal_done: set[str] = set()
+_ready: set[str] = set()  # db paths whose WAL mode + schema (+ vec tables) are set up this process
+_ready_lock = threading.Lock()
 
 
 def connect() -> sqlite3.Connection:
-    """Open a fresh connection (caller closes it); the schema is created on demand."""
+    """Open a fresh connection (caller closes it); the schema is created once per process per path."""
     path = get_settings().data_dir / "brain.db"
     path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(path)
-    if str(path) not in _wal_done:
-        con.execute("PRAGMA journal_mode=WAL")
-        _wal_done.add(str(path))
-    con.executescript(_SCHEMA)
+    key = str(path)
+    fresh = not path.exists()  # deleted/new file: set it up again
+    con = sqlite3.connect(path, timeout=30)
     from . import vec  # lazy: vec imports db
-    vec.ensure_tables(con)
+    with _ready_lock:
+        if fresh:
+            _ready.discard(key)
+        if key not in _ready:
+            con.execute("PRAGMA journal_mode=WAL")
+            con.executescript(_SCHEMA)
+            vec.ensure_tables(con)
+            _ready.add(key)
+            return con
+    vec.load_extension(con)  # extensions are per connection; the DDL above is not
     return con

@@ -19,12 +19,13 @@ LEARN start "<CR의 문장 그대로>" [--days N] [--level 초등|일반|전문]
 
 ## 2. 지켜보기
 `start`가 지켜보다 끊겼으면 `LEARN watch <slug>`로 이어요. 단계가 바뀔 때마다 한 줄씩 나와요.
+상태는 `running` + `summary.stage`(plan·collect·classify·teach·bridge·archive)로 표시됨.
 종료 코드: 완료 0 · 실패 1 · 생각 담당 필요 3.
 
 ## 3. 종료 코드 3 — 생각 담당 (서버가 모델을 못 구해 과제를 맡긴 상태)
 1. 스크래치패드에 폴더를 잡고 과제를 받아요: `LEARN tasks <slug> --out <폴더>`
 2. 폴더의 `*.prompt.md`마다 심부름꾼을 하나씩 불러요. **한 메시지에 병렬로 한꺼번에** 불러요.
-   - 모델: `plan`, `teach`, `bridge` 과제는 **opus**, `classify` 과제는 **sonnet**
+   - 모델: `plan`, `teach` 과제는 **opus**, `classify`, `bridge` 과제는 **sonnet**
    - 지시: `.prompt.md` 내용을 그대로 주고 "스키마를 만족하는 **JSON 객체 하나만** 돌려줘, 설명 금지"라고 해요.
 3. 돌아온 JSON을 과제마다 파일(`<task_id>.out.json`)로 저장해요. 코드펜스나 설명이 섞였으면 JSON만 남겨요.
 4. 하나씩 제출해요: `LEARN submit <slug> <task_id> <파일>`

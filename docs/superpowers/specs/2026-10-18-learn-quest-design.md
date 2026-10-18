@@ -114,6 +114,7 @@ CR에게: 지도 페이지 링크 1개 + 한 줄 요약 + "예전 지식과 이�
 - 실행: FastAPI 백그라운드 스레드 1개(단일 인스턴스). 단계마다 `quest.json`에 체크포인트 → 서버 재시작 후 `POST /quests/{slug}/resume`로 이어서. 러너 시작 시 `running` 상태였던 퀘스트는 자동 재개.
 - 상태: `queued → planning → collecting → classifying → teaching → bridging → archiving → done`, 어느 단계에서든 `waiting_thinker` 또는 `failed(reason)`.
 - 예산 가드(퀘스트당 기본): 생각 호출 ≤ 40, 수집 자료 ≤ 45건, 자료 1건 본문 ≤ 60k자, PDF ≤ 40쪽, 총 실행 ≤ 30분. 초과 시 그 단계는 있는 것으로 마무리하고 장부에 기록.
+- 구현 메모: 상태값은 running + summary.stage(plan|collect|…); 다리 evidence는 'bridge' 표식.
 
 ### 5.4 1단계 plan — 퀘스트 설계도 (생각)
 
