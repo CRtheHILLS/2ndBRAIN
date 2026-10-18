@@ -15,7 +15,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
-from . import catalog, graph, index, levels, models, prompts, store, think
+from . import graph, models, think
 from .config import get_settings
 from .slug import slugify
 
@@ -167,14 +167,6 @@ class Parked(Exception):
         super().__init__(task_id)
 
 
-class _ParkedInCatalog(think.ThinkUnavailable):
-    """Carries a parked task id through catalog.learn_batch (it re-raises only ThinkUnavailable)."""
-
-    def __init__(self, task_id: str):
-        self.task_id = task_id
-        super().__init__([f"과제 대기: {task_id}"])
-
-
 def task_path(slug: str, task_id: str) -> Path:
     return quest_dir(slug) / "tasks" / f"{task_id}.json"
 
@@ -194,7 +186,7 @@ def _write_task(slug: str, task: dict) -> None:
     os.replace(tmp, p)
 
 
-def _all_tasks(slug: str) -> list[dict]:
+def all_tasks(slug: str) -> list[dict]:
     d = quest_dir(slug) / "tasks"
     out = []
     for p in sorted(d.glob("*.json")) if d.is_dir() else []:
@@ -206,8 +198,10 @@ def _all_tasks(slug: str) -> list[dict]:
 
 
 def open_tasks(slug: str) -> list[dict]:
-    tasks = [{k: t.get(k) for k in TASK_KEYS} for t in _all_tasks(slug) if t.get("status") == "open"]
-    return sorted(tasks, key=lambda t: t["created_at"] or "")
+    """Open tasks, the one the quest is waiting on first, then by creation time."""
+    tasks = [{k: t.get(k) for k in TASK_KEYS} for t in all_tasks(slug) if t.get("status") == "open"]
+    waiting = load(slug).get("summary", {}).get("waiting_task")
+    return sorted(tasks, key=lambda t: (t["task_id"] != waiting, t["created_at"] or ""))
 
 
 def task_result(slug: str, task_id: str) -> dict | None:
@@ -215,15 +209,27 @@ def task_result(slug: str, task_id: str) -> dict | None:
     return t["result"] if t and t.get("status") == "done" else None
 
 
+SUPERSEDING_PREFIXES = ("classify-",)  # stages that re-batch on resume
+
+
 def _park(slug: str, task: dict, reason: str):
+    tid = task["task_id"]
     task.update(status="open", error=reason)
     _write_task(slug, task)
-    log(slug, event="parked", task=task["task_id"], reason=reason)
-    raise Parked(task["task_id"])
+    prefix = next((p for p in SUPERSEDING_PREFIXES if tid.startswith(p)), None)
+    if prefix:  # an older batch's open task would never be used again
+        for t in all_tasks(slug):
+            if t.get("status") == "open" and t["task_id"] != tid and t["task_id"].startswith(prefix):
+                t.update(status="superseded", superseded_by=tid)
+                _write_task(slug, t)
+    log(slug, event="parked", task=tid, reason=reason)
+    raise Parked(tid)
 
 
 def think_or_cached(slug: str, task_id: str, kind: str, system: str, user: str,
                     schema: type[BaseModel], context: dict | None = None) -> dict:
+    if models.SCHEMAS.get(schema.__name__) is not schema:
+        raise ValueError(f"알 수 없는 스키마: {schema.__name__}")
     task = _read_task(slug, task_id)
     if task and task.get("status") == "done":
         return task["result"]
@@ -247,7 +253,11 @@ def submit_task(slug: str, task_id: str, output: dict) -> dict:
     task = _read_task(slug, task_id)
     if task is None:
         raise KeyError(f"과제를 찾을 수 없음: {task_id}")
-    schema = models.SCHEMAS[task["schema"]]
+    if task.get("status") == "done":
+        raise ValueError(f"이미 끝난 과제예요: {task_id}")
+    schema = models.SCHEMAS.get(task.get("schema") or "")
+    if schema is None:
+        raise ValueError(f"알 수 없는 스키마: {task.get('schema')}")
     try:
         validated = schema.model_validate(output)
     except ValidationError as e:
@@ -261,105 +271,17 @@ def submit_task(slug: str, task_id: str, output: dict) -> dict:
     return {"accepted": True, "task_id": task_id}
 
 
-# --- stages -----------------------------------------------------------------
+# --- stages live in quest_stages (it imports this module) --------------------
 
-def _plan_user(q: dict) -> str:
-    sentence = q["sentence"]
-    titles, seen = [], set()
-    for h in index.search(sentence, 20):
-        if h["path"] not in seen:
-            seen.add(h["path"])
-            titles.append(f"- {h['slug']}: {h['path']}")
-    concepts, ids = [], set()
-    for tok in re.findall(r"\w{2,}", sentence):
-        for n in graph.search_labels(tok, 5):
-            if n and n["id"] not in ids and len(concepts) < 20:
-                ids.add(n["id"])
-                en = f" ({n['label_en']})" if n.get("label_en") else ""
-                concepts.append(f"- {n['label_ko']}{en}")
-    return "\n".join([
-        f"배우고 싶은 것: {sentence}",
-        f"요청 일수: {q['days_requested']}",
-        f"수준: {q['level']}",
-        "볼륨에 이미 있는 관련 자료:", *(titles[:20] or ["- (없음)"]),
-        "그래프에 이미 있는 관련 개념:", *(concepts or ["- (없음)"]),
-    ])
+_STAGE_NAMES = {"STAGE_FUNCS", "stage_plan", "stage_collect", "stage_classify",
+                "stage_teach", "stage_bridge", "stage_archive"}
 
 
-def stage_plan(slug: str) -> None:
-    q = load(slug)
-    data = think_or_cached(slug, "plan", "plan", prompts.plan_system(q["days_requested"]),
-                           _plan_user(q), models.QuestPlan)
-    plan = models.QuestPlan.model_validate(data)
-    if not plan.days:
-        raise ValueError("계획에 날짜가 하나도 없음")
-    if len(plan.days) != q["days_requested"]:
-        log(slug, event="plan_days_mismatch", requested=q["days_requested"], got=len(plan.days))
-    q = load(slug)
-    q["plan"] = plan.model_dump()
-    save(slug, q)
-    levels.set_level(f"quest:{slug}", q["level"])
-    store.upsert_book(slug, plan.title_ko)
-    graph.upsert_node(f"quest:{slug}", "quest", plan.title_ko, plan.title_en, summary=plan.one_line_goal)
-
-
-def stage_collect(slug: str) -> None:
-    from . import collect  # collect imports quest
-    plan = models.QuestPlan.model_validate(load(slug)["plan"])
-    ledger = collect.collect_quest(slug, plan)
-    q = load(slug)
-    q["budget"]["sources"] = sum(1 for s in ledger.sources if s.fetched)
-    save(slug, q)
-
-
-def _classify_task_id(slug: str, user: str) -> str:
-    """Same batch text -> same task (a submitted answer is reused); else the next index."""
-    known = [t for t in _all_tasks(slug) if str(t.get("task_id", "")).startswith("classify-")]
-    for t in known:
-        if t.get("user") == user:
-            return t["task_id"]
-    return f"classify-{len(known)}"
-
-
-def stage_classify(slug: str) -> None:
-    def complete(system: str, user: str) -> str:
-        tid = _classify_task_id(slug, user)
-        try:
-            result = think_or_cached(slug, tid, "classify", system, user, models.CatalogBatch)
-        except Parked as p:
-            raise _ParkedInCatalog(p.task_id) from None
-        return json.dumps(result, ensure_ascii=False)
-
-    stalls = 0
-    try:
-        for _ in range(3):
-            r = catalog.learn_pending(limit=200, llm_complete=complete, book=slug, batch_size=5)
-            if r["remaining"] == 0:
-                break
-            stalls = stalls + 1 if r["learned"] == 0 else 0
-            if stalls >= 2:
-                break
-    except _ParkedInCatalog as e:
-        raise Parked(e.task_id) from None
-    q = load(slug)
-    q["summary"]["n_concepts"] = len(graph.node_ids_in_book(slug, kind="concept"))
-    save(slug, q)
-
-
-def stage_teach(slug: str) -> None:  # Task 12
-    pass
-
-
-def stage_bridge(slug: str) -> None:  # Task 15
-    pass
-
-
-def stage_archive(slug: str) -> None:  # Task 13
-    pass
-
-
-STAGE_FUNCS = {"plan": stage_plan, "collect": stage_collect, "classify": stage_classify,
-               "teach": stage_teach, "bridge": stage_bridge, "archive": stage_archive}
+def __getattr__(name: str):
+    if name in _STAGE_NAMES:  # re-export, resolved lazily to avoid the import cycle
+        from . import quest_stages
+        return getattr(quest_stages, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _summarize(slug: str) -> dict:
@@ -389,6 +311,7 @@ def run(slug: str) -> dict:
     q["summary"].pop("waiting_task", None)
     save(slug, q)
     limit = get_settings().quest_max_minutes * 60
+    from . import quest_stages  # imports this module
     try:
         for stage in STAGES:
             q = load(slug)
@@ -405,7 +328,7 @@ def run(slug: str) -> dict:
             q["summary"]["stage"] = stage
             save(slug, q)
             t0 = time.monotonic()
-            STAGE_FUNCS[stage](slug)
+            quest_stages.STAGE_FUNCS[stage](slug)
             elapsed = time.monotonic() - t0
             q = load(slug)
             q["stage_done"].append(stage)

@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from brain import collect, config, graph, models, quest, store, think
+from brain import collect, config, graph, models, quest, quest_stages, store, think
 from brain.connectors import registry
 from brain.connectors.base import Candidate, Doc
 
@@ -29,12 +29,16 @@ class FakeThink:
     def __init__(self):
         self.calls = []
         self.unavailable = False
+        self.plan_days = 2
+        self.classify_answers = []  # popped per classify call; None = unavailable
 
     def __call__(self, kind, system, user, schema=None, *, smart=None, log_path=None):
         self.calls.append(kind)
-        if self.unavailable:
+        scripted = kind == "classify" and bool(self.classify_answers)
+        answer = self.classify_answers.pop(0) if scripted else None
+        if self.unavailable or (scripted and answer is None):
             raise think.ThinkUnavailable(["anthropic: no key", "gemini: no key"])
-        data = _plan_dict() if kind == "plan" else _batch_dict()
+        data = answer or (_plan_dict(self.plan_days) if kind == "plan" else _batch_dict())
         return think.ThinkResult(data, "fake", "fake-1", 10, 20, 0.01)
 
 
@@ -73,6 +77,7 @@ def test_run_plan_then_collect_then_classify_with_fakes(fakes):
     assert q["summary"]["n_concepts"] >= 1
     assert q["summary"]["n_sources"] == q["budget"]["sources"] >= 1
     assert q["summary"]["pages"] == {} and q["summary"]["bridges"] == 0
+    assert q["summary"]["classify_remaining"] == 0
     assert q["budget"]["think_calls"] == len(fakes.calls)
     assert graph.get_node(f"quest:{slug}")["kind"] == "quest"
     assert quest.task_result(slug, "plan")["title_ko"] == "헬리콥터"
@@ -186,3 +191,64 @@ def test_time_budget_after_teach_finishes_done(fakes):
     quest.save(slug, q)
     out = quest.run(slug)
     assert out["status"] == "done" and out["summary"]["budget_exceeded"] is True
+
+
+# --- review fixes -------------------------------------------------------------
+
+def test_stale_classify_task_superseded_on_rebatch(fakes):
+    fakes.plan_days = 4  # 8 dots -> 8 raw files -> batches of 5 + 3
+    partial = {"cards": _batch_dict()["cards"][:3]}  # first batch: only 3 of 5 learned
+    fakes.classify_answers = [partial, None, None]
+    slug = quest.create("헬리콥터", days=4)["slug"]
+    out = quest.run(slug)
+    assert out["status"] == "waiting_thinker"
+    assert out["summary"]["waiting_task"] == "classify-1"
+    out = quest.run(slug)  # pending shifted -> new batch text -> new task
+    assert out["status"] == "waiting_thinker"
+    waiting = out["summary"]["waiting_task"]
+    assert waiting == "classify-2"
+    tasks = quest.open_tasks(slug)
+    assert [t["task_id"] for t in tasks] == [waiting]
+    old = json.loads(quest.task_path(slug, "classify-1").read_text("utf-8"))
+    assert old["status"] == "superseded" and old["superseded_by"] == waiting
+
+
+def test_submit_refuses_done_task_and_unknown_schema(fakes):
+    slug = quest.create("헬리콥터", days=2)["slug"]
+    quest.run(slug)
+    with pytest.raises(ValueError, match="이미 끝난 과제"):
+        quest.submit_task(slug, "plan", _plan_dict())
+    p = quest.task_path(slug, "weird")
+    p.write_text(json.dumps({"task_id": "weird", "schema": "Nope", "status": "open"}), "utf-8")
+    with pytest.raises(ValueError, match="알 수 없는 스키마"):
+        quest.submit_task(slug, "weird", {})
+
+
+def test_think_or_cached_rejects_unregistered_schema(fakes):
+    class Unregistered(models.BaseModel):
+        x: int = 0
+
+    slug = quest.create("헬리콥터", days=2)["slug"]
+    with pytest.raises(ValueError, match="알 수 없는 스키마"):
+        quest.think_or_cached(slug, "t", "classify", "s", "u", Unregistered)
+    assert fakes.calls == []
+
+
+def test_classify_id_uses_max_suffix(data_dir):
+    slug = quest.create("헬리콥터", days=2)["slug"]
+    d = quest.task_path(slug, "x").parent
+    d.mkdir(parents=True)
+    (d / "classify-0.json").write_text(json.dumps({"task_id": "classify-0", "user": "a"}), "utf-8")
+    (d / "classify-5.json").write_text("{broken", "utf-8")
+    assert quest_stages._classify_task_id(slug, "a") == "classify-0"
+    assert quest_stages._classify_task_id(slug, "b") == "classify-6"
+
+
+def test_plan_tokens_strip_particles_and_stopwords():
+    assert quest_stages._tokens("나 헬리콥터를 완벽히 배우고 싶어") == ["헬리콥터"]
+    assert quest_stages._tokens("양자역학의 역사와 철학") == ["양자역학", "역사", "철학"]
+
+
+def test_stage_names_reexported_from_quest():
+    assert quest.STAGE_FUNCS is quest_stages.STAGE_FUNCS
+    assert quest.stage_plan is quest_stages.stage_plan
