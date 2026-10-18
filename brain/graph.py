@@ -337,4 +337,10 @@ def ingest_card(entry: dict) -> list[str]:
     for i, a in enumerate(ids):
         for b in ids[i + 1:]:
             add_edge(*sorted((a, b)), "related", reason="co-occurs", evidence=src)
+    if new:
+        try:
+            from . import vec  # lazy: vec imports db
+            vec.index_nodes(new)
+        except Exception:
+            pass
     return new

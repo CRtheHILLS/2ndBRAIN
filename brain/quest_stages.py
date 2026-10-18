@@ -298,6 +298,11 @@ def _estimate_cost(slug: str) -> float:
 def _stage_archive(slug: str) -> None:
     t0 = time.monotonic()
     index.rebuild()
+    try:
+        from . import vec
+        vec.index_book(slug)
+    except Exception as e:
+        log.warning("vec.index_book failed: %s", e)
     render_quest = getattr(render, "render_quest", None)  # added by the render task
     if render_quest is not None:
         render_quest(slug)

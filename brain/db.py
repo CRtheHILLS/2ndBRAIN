@@ -32,4 +32,6 @@ def connect() -> sqlite3.Connection:
         con.execute("PRAGMA journal_mode=WAL")
         _wal_done.add(str(path))
     con.executescript(_SCHEMA)
+    from . import vec  # lazy: vec imports db
+    vec.ensure_tables(con)
     return con
