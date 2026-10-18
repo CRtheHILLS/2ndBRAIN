@@ -1,5 +1,7 @@
 """Pydantic models shared by the think() callers."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -22,3 +24,76 @@ class CatalogCard(BaseModel):
 
 class CatalogBatch(BaseModel):
     cards: list[CatalogCard]
+
+
+# ---------------------------------------------------------------------------
+# learn-quest
+# ---------------------------------------------------------------------------
+
+class Dot(BaseModel):
+    concept_ko: str
+    concept_en: str = ""
+    why_one_line: str = ""
+    queries_ko: list[str] = Field(default_factory=list)
+    queries_en: list[str] = Field(default_factory=list)
+    prefer_kinds: list[str] = Field(default_factory=list)
+    evidence_grade_hint: str = "확립됨"
+
+
+class DayPlan(BaseModel):
+    n: int
+    big_idea: str
+    dots: list[Dot]
+
+
+class Honesty(BaseModel):
+    learnable_by_reading: list[str] = Field(default_factory=list)
+    needs_practice: list[str] = Field(default_factory=list)
+    hype_warning: list[str] = Field(default_factory=list)
+
+
+class SpecialSource(BaseModel):
+    name: str
+    url: str = ""
+    why: str = ""
+
+
+class BridgeHint(BaseModel):
+    target: str
+    why: str = ""
+
+
+class QuestPlan(BaseModel):
+    kind: Literal["skill", "topic", "question"]
+    title_ko: str
+    title_en: str = ""
+    one_line_goal: str
+    honesty: Honesty = Field(default_factory=Honesty)
+    prerequisites: list[str] = Field(default_factory=list)
+    days: list[DayPlan]
+    special_sources: list[SpecialSource] = Field(default_factory=list)
+    bridge_hints: list[BridgeHint] = Field(default_factory=list)
+
+
+class SourceRecord(BaseModel):
+    url: str
+    title: str
+    kind: str
+    connector: str
+    score: float
+    day: int
+    dot: str
+    lang: str
+    why_picked: str
+    fetched: bool
+    reason: str = ""
+    raw_file: str = ""
+    chars: int = 0
+
+
+class SourceLedger(BaseModel):
+    sources: list[SourceRecord] = Field(default_factory=list)
+    connector_status: dict[str, dict[str, int]] = Field(default_factory=dict)
+    special_tried: list[dict] = Field(default_factory=list)
+    vault_hits: list[dict] = Field(default_factory=list)
+    new_connectors_tried: list[str] = Field(default_factory=list)
