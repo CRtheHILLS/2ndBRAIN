@@ -119,7 +119,8 @@ def test_gemini_adapter_rest(data_dir, monkeypatch):
         assert T._gemini("sys", "usr", "gm") == ("hi", 7, 2)
         body = json.loads(route.calls[0].request.content)
         assert body["generationConfig"]["responseMimeType"] == "application/json"
-        assert route.calls[0].request.url.params["key"] == "gk"
+        assert route.calls[0].request.headers["x-goog-api-key"] == "gk"
+        assert "key" not in route.calls[0].request.url.params
 
 
 def test_xai_adapter_and_non2xx(data_dir, monkeypatch):
@@ -136,3 +137,38 @@ def test_xai_adapter_and_non2xx(data_dir, monkeypatch):
         respx.post("https://api.x.ai/v1/chat/completions").mock(return_value=httpx.Response(500))
         with pytest.raises(httpx.HTTPStatusError):
             T._xai("s", "u", "m")
+
+
+def test_log_path_also_counts_toward_daily_cap(data_dir, monkeypatch):
+    _keys(monkeypatch, a="a")
+    monkeypatch.setattr(T, "_anthropic", lambda s, u, m: ('{"a":1}', 1, 1))
+    log = data_dir / "quest.jsonl"
+    T.think("classify", "s", "u", log_path=log)
+    assert T.daily_count() == 1
+    assert len(log.read_text("utf-8").splitlines()) == 1
+
+
+def test_failing_gemini_does_not_leak_key(data_dir, monkeypatch):
+    import httpx
+    import respx
+    _keys(monkeypatch, g="SECRETKEY")
+    with respx.mock:
+        respx.post("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
+                   ).mock(return_value=httpx.Response(500))
+        with pytest.raises(T.ThinkUnavailable) as e:
+            T.think("classify", "s", "u")
+    assert "SECRETKEY" not in " ".join(e.value.reasons)
+    assert "gemini: HTTP 500" in e.value.reasons
+
+
+def test_complete_text_is_metered_and_capped(data_dir, monkeypatch):
+    _keys(monkeypatch, x="x")
+    monkeypatch.setenv("THINK_DAILY_CAP", "1")
+    from brain import config
+    config.get_settings.cache_clear()
+    monkeypatch.setattr(T, "_xai", lambda s, u, m: ("hi", 1, 1))
+    T.complete_text("s", "u", False)
+    assert T.daily_count() == 1
+    with pytest.raises(T.ThinkUnavailable) as e:
+        T.complete_text("s", "u", False)
+    assert e.value.reasons == ["daily cap"]

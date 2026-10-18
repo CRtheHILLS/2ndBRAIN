@@ -69,7 +69,8 @@ def _gemini(system: str, user: str, model: str) -> tuple[str, int, int]:
     body = {"system_instruction": {"parts": [{"text": system}]},
             "contents": [{"parts": [{"text": user}]}],
             "generationConfig": {"responseMimeType": "application/json"}}
-    r = httpx.post(url, params={"key": get_settings().gemini_api_key}, json=body, timeout=HTTP_TIMEOUT)
+    r = httpx.post(url, json=body, timeout=HTTP_TIMEOUT,
+                   headers={"x-goog-api-key": get_settings().gemini_api_key})
     r.raise_for_status()
     j = r.json()
     parts = j["candidates"][0]["content"]["parts"]
@@ -139,27 +140,41 @@ def record_usage(kind: str, provider: str, model: str, input_tokens: int, output
                  seconds: float, log_path: Path | None = None) -> None:
     row = {"at": dt.datetime.now().isoformat(timespec="seconds"), "kind": kind, "provider": provider,
            "model": model, "in": input_tokens, "out": output_tokens, "sec": round(seconds, 2)}
-    with (log_path or _usage_path()).open("a", encoding="utf-8") as f:
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    line = json.dumps(row, ensure_ascii=False) + "\n"
+    for path in (_usage_path(), log_path):
+        if path is not None:
+            with path.open("a", encoding="utf-8") as f:
+                f.write(line)
 
 
 # ---------------------------------------------------------------------------
 # public API
 # ---------------------------------------------------------------------------
 
+def _reason(provider: str, e: Exception) -> str:
+    """Failure reason without URLs or keys (httpx messages embed the request URL)."""
+    if isinstance(e, httpx.HTTPStatusError):
+        return f"{provider}: HTTP {e.response.status_code}"
+    return f"{provider}: {type(e).__name__}"
+
+
 def complete_text(system: str, user: str, smart: bool) -> tuple[str, str, str, int, int]:
     """First provider that answers wins -> (text, provider, model, in_tok, out_tok)."""
+    if daily_count() >= get_settings().think_daily_cap:
+        raise ThinkUnavailable(["daily cap"])
     reasons: list[str] = []
     for p in _order():
         if not _has_key(p):
             reasons.append(f"{p}: no key")
             continue
         model = _model_for(p, smart)
+        t0 = time.monotonic()
         try:
             text, i, o = _call(p, system, user, model)
         except Exception as e:  # noqa: BLE001 - any failure moves the chain on
-            reasons.append(f"{p}: {type(e).__name__}: {e}")
+            reasons.append(_reason(p, e))
             continue
+        record_usage("text", p, model, i, o, time.monotonic() - t0)
         return text, p, model, i, o
     raise ThinkUnavailable(reasons)
 
@@ -182,7 +197,7 @@ def think(kind: str, system: str, user: str, schema: type[BaseModel] | None = No
             try:
                 text, i, o = _call(p, system, user + (RETRY_SUFFIX if attempt else ""), model)
             except Exception as e:  # noqa: BLE001
-                reasons.append(f"{p}: {type(e).__name__}: {e}")
+                reasons.append(_reason(p, e))
                 break
             secs = time.monotonic() - t0
             record_usage(kind, p, model, i, o, secs, log_path)
