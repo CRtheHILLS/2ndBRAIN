@@ -5,6 +5,7 @@ Layout under ``DATA_DIR/quests/<slug>``: ``quest.json``, ``log.jsonl``,
 """
 import datetime as dt
 import json
+import os
 import re
 from pathlib import Path
 
@@ -54,7 +55,9 @@ def save(slug: str, q: dict) -> None:
     q["updated_at"] = _now()
     d = quest_dir(slug)
     d.mkdir(parents=True, exist_ok=True)
-    (d / "quest.json").write_text(json.dumps(q, ensure_ascii=False, indent=2), "utf-8")
+    tmp = d / "quest.json.tmp"
+    tmp.write_text(json.dumps(q, ensure_ascii=False, indent=2), "utf-8")
+    os.replace(tmp, d / "quest.json")
 
 
 def list_quests() -> list[dict]:
@@ -78,18 +81,19 @@ def find_existing(sentence: str) -> str | None:
 
 
 def _extract_days(sentence: str) -> int:
-    if re.search(r"하루|오늘 안에|하룻밤", sentence):
+    if re.search(r"하루(?!키)|오늘 안에|하룻밤", sentence):
         return 1
-    m = re.search(r"(\d{1,2})\s*일", sentence)
+    t = re.sub(r"\d{1,2}\s*월\s*\d{1,2}\s*일", " ", sentence)  # calendar dates are not durations
+    m = re.search(r"(?<!\d)(\d{1,2})\s*일(?![반본월])", t)
     if m and 1 <= int(m.group(1)) <= 30:
         return int(m.group(1))
     return 7
 
 
 def _extract_level(sentence: str) -> str:
-    if "전문" in sentence:
+    if re.search(r"전문가|전문적으로|전문\s*수준", sentence):
         return "전문"
-    if "일반" in sentence or "교양" in sentence:
+    if re.search(r"일반인|교양|일반\s*수준", sentence):
         return "일반"
     return "초등"
 

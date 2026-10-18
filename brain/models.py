@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ConceptPair(BaseModel):
@@ -30,6 +30,9 @@ class CatalogBatch(BaseModel):
 # learn-quest
 # ---------------------------------------------------------------------------
 
+KINDS = ("official", "encyclopedia", "paper", "textbook", "video", "web", "forum", "book")
+
+
 class Dot(BaseModel):
     concept_ko: str
     concept_en: str = ""
@@ -37,7 +40,12 @@ class Dot(BaseModel):
     queries_ko: list[str] = Field(default_factory=list)
     queries_en: list[str] = Field(default_factory=list)
     prefer_kinds: list[str] = Field(default_factory=list)
-    evidence_grade_hint: str = "확립됨"
+    evidence_grade_hint: Literal["확립됨", "연구중", "추측", "상술"] = "연구중"
+
+    @field_validator("prefer_kinds")
+    @classmethod
+    def _known_kinds(cls, v: list[str]) -> list[str]:
+        return [k for k in v if k in KINDS]
 
 
 class DayPlan(BaseModel):

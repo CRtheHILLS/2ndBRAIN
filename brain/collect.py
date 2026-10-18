@@ -132,6 +132,7 @@ def run_dot(slug: str, day: int, dot: Dot, quota: int, ledger: SourceLedger,
         if doc is None or not doc.text.strip():
             reason = "본문을 가져오지 못함" if doc is None else "본문이 비어 있음"
             ledger.sources.append(SourceRecord(**rec, fetched=False, reason=reason))
+            used_urls.update({c.url, normalize_url(c.url)})  # never retry a dead URL
             continue
         name, chars = _save_raw(slug, day, dot.concept_ko, c.url, doc.title or c.title, c.kind,
                                 c.connector, doc.lang or c.lang, sc, doc.text)
@@ -181,16 +182,21 @@ def collect_quest(slug: str, plan: QuestPlan) -> SourceLedger:
     ledger = SourceLedger()
     used: set[str] = set()
     saved = 0
-    for day in plan.days:
-        for dot in day.dots:
-            if saved >= s.quest_max_sources:
+    reserve = min(3, len(plan.special_sources))
+    dots = [(day.n, dot) for day in plan.days for dot in day.dots]
+    try:
+        for i, (n, dot) in enumerate(dots):
+            remaining = s.quest_max_sources - reserve - saved
+            if remaining <= 0:
                 break
-            saved += run_dot(slug, day.n, dot, min(s.quest_quota_per_dot, s.quest_max_sources - saved),
-                             ledger, used)
-        if saved >= s.quest_max_sources:
-            break
-    run_special(slug, plan.special_sources, ledger, used, limit=max(0, s.quest_max_sources - saved))
-    ledger.new_connectors_tried = [n for n, row in ledger.connector_status.items() if row["results"] > 0]
-    index.rebuild()
-    quest.save_ledger(slug, ledger)
+            quota_now = max(1, min(s.quest_quota_per_dot, remaining // (len(dots) - i)))
+            try:
+                saved += run_dot(slug, n, dot, quota_now, ledger, used)
+            finally:
+                quest.save_ledger(slug, ledger)
+        run_special(slug, plan.special_sources, ledger, used, limit=max(0, s.quest_max_sources - saved))
+        ledger.new_connectors_tried = [n for n, row in ledger.connector_status.items() if row["results"] > 0]
+        index.rebuild()
+    finally:
+        quest.save_ledger(slug, ledger)
     return ledger
