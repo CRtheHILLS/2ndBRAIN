@@ -2,7 +2,7 @@
 
 ## 2026-10-18 학습 퀘스트 시스템 완성 — 다음 세션에 먼저 할 일
 - [ ] **CR 확인 5가지** (스펙 §10): ① xAI 유료 검색 켜 둘지(현재 켬, 소액) ② Anthropic 크레딧 충전 시점(지금 0 → Gemini 무료 + xAI가 일함) ③ 7일 기본값 유지? ④ 분류표 2단계(156개 분야, `brain/frame/taxonomy.json` status: draft) 검토 → v1 ⑤ 수업 페이지(/site/**)를 토큰 필요로 올릴지
-- [ ] **첫 퀘스트 피드백 받기:** 창세기 1장 창조론 7일 — 지도: https://2ndbrain-production-4ab7.up.railway.app/site/quests/quest-20261018-창세기-1장-창조론을-과학-고고학-역사-증거와-현재까지의-모든-논란-이슈/index.html (45 자료 · 29 점 · 162 개념 · 비용 ≈ $0.01 · 16분). 어느 부분이 아직 어려웠는지 → `rerender` 또는 프롬프트 보강
+- [ ] **첫 퀘스트 피드백 받기:** 창세기 1장 창조론 7일 — 지도: https://2ndbrain-production-4ab7.up.railway.app/site/quests/quest-20261018-창세기-1장-창조론을-과학-고고학-역사-증거와-현재까지의-모든-논란-이슈/index.html (45 자료 · 29 점 · 162 개념 · 비용 ≈ $0.01 · 16분). 수동 `POST /graph/rebridge?limit=100` 후 다리 39개 — 예: Day 3 '열역학 창조론 논증 ↔ 열역학(양자역학에서 배움)', Day 4 '빅뱅 우주론 ↔ 우주론'. 어느 부분이 아직 어려웠는지 → `rerender` 또는 프롬프트 보강
   - 알려진 다듬을 점: 날마다 말투가 "~요"/"~이다"로 섞임 → teach 프롬프트에 존댓말 한 가지로 고정; 출처 링크가 "[1]"로만 보임 → 제목 표시
 - [ ] **분류 백로그 958건** (비숑 272·손자병법 300·장수마을 138·인간관계론 154·THE-MIND 86…): `POST /catalog/learn?limit=25&book=<책>` 반복. Gemini 무료 한도·일일 상한(THINK_DAILY_CAP=200) 안에서 하루 2~3권씩. 분류될수록 다리(bridge)가 저절로 늘어남
 - [ ] **두뇌 그래프 링크 CR에게 주기:** `/site/brain/index.html?t=<BRAIN_TOKEN>` (한 번 열면 브라우저에 저장). Obsidian: `GET /vault.zip` (토큰) → 압축 풀고 Obsidian에서 폴더 열기
