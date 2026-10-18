@@ -1,6 +1,7 @@
 """Connector base types: Candidate, Doc, Connector protocol, URL normalization, HTTP helper."""
 from __future__ import annotations
 
+import threading
 from typing import Literal, Protocol
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -61,11 +62,28 @@ def normalize_url(url: str) -> str:
     return urlunsplit((scheme, host, path, query, ""))
 
 
+_client: httpx.Client | None = None
+_client_lock = threading.Lock()
+
+
+def _get_client() -> httpx.Client:
+    global _client
+    with _client_lock:
+        if _client is None:
+            _client = httpx.Client(headers={"User-Agent": UA}, follow_redirects=True)
+        return _client
+
+
+def close_client() -> None:
+    global _client
+    with _client_lock:
+        if _client is not None:
+            _client.close()
+            _client = None
+
+
 def http_get(url: str, params: dict | None = None, timeout: float = 20,
              headers: dict | None = None) -> httpx.Response:
-    h = {"User-Agent": UA}
-    if headers:
-        h.update(headers)
-    r = httpx.get(url, params=params, timeout=timeout, headers=h, follow_redirects=True)
+    r = _get_client().get(url, params=params, timeout=timeout, headers=headers)
     r.raise_for_status()
     return r

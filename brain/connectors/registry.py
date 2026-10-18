@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -38,9 +39,10 @@ def search_all(query: str, lang: str, limit_per: int = 5, names: Iterable[str] |
     pool = ThreadPoolExecutor(max_workers=8)
     try:
         futures = {n: pool.submit(c.search, query, lang, limit_per) for n, c in conns.items()}
+        deadline = time.monotonic() + timeout
         for name, fut in futures.items():
             try:
-                found = fut.result(timeout=timeout)
+                found = fut.result(timeout=max(0.0, deadline - time.monotonic()))
                 candidates.extend(found)
                 status[name] = f"ok:{len(found)}"
             except FutureTimeout:

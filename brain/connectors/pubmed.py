@@ -25,7 +25,10 @@ class PubMedConnector:
             "db": "pubmed", "id": ",".join(ids), "retmode": "xml",
         }).text)
         out = []
-        for art, pmid in zip(root.findall("PubmedArticle"), ids):
+        for art in root.findall("PubmedArticle"):
+            pmid = (art.findtext(".//MedlineCitation/PMID") or "").strip()
+            if not pmid:
+                continue
             year = _flat(art.find(".//PubDate/Year"))
             abstract = "\n".join(_flat(a) for a in art.findall(".//AbstractText"))
             out.append(Candidate(

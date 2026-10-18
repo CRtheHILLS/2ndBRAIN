@@ -69,23 +69,30 @@ def test_arxiv_search_and_fetch():
     assert c.fetch(x).text == "An abstract here."
 
 
-EFETCH = """<PubmedArticleSet><PubmedArticle><MedlineCitation><Article>
+EFETCH = """<PubmedArticleSet><PubmedArticle><MedlineCitation><PMID>42</PMID><Article>
 <Journal><JournalIssue><PubDate><Year>2019</Year></PubDate></JournalIssue></Journal>
 <ArticleTitle>Brain study</ArticleTitle>
 <Abstract><AbstractText>Part one.</AbstractText><AbstractText>Part two.</AbstractText></Abstract>
+</Article></MedlineCitation></PubmedArticle>
+<PubmedArticle><MedlineCitation><PMID>7</PMID><Article>
+<ArticleTitle>Other study</ArticleTitle><Abstract><AbstractText>Other.</AbstractText></Abstract>
 </Article></MedlineCitation></PubmedArticle></PubmedArticleSet>"""
 
 
 @respx.mock
 def test_pubmed_search_and_fetch():
     respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi").mock(
-        return_value=httpx.Response(200, json={"esearchresult": {"idlist": ["42"]}}))
+        return_value=httpx.Response(200, json={"esearchresult": {"idlist": ["7", "99", "42"]}}))
     respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi").mock(
         return_value=httpx.Response(200, text=EFETCH))
     c = pubmed.PubMedConnector()
-    x = c.search("brain", "en", 3)[0]
-    assert x.title == "Brain study" and x.kind == "paper" and x.connector == "pubmed" and x.year == 2019
-    assert x.url == "https://pubmed.ncbi.nlm.nih.gov/42"
+    cands = c.search("brain", "en", 3)
+    assert len(cands) == 2  # id 99 was omitted by efetch
+    by_title = {y.title: y for y in cands}
+    assert by_title["Other study"].url == "https://pubmed.ncbi.nlm.nih.gov/7"
+    x = by_title["Brain study"]
+    assert x.kind == "paper" and x.connector == "pubmed" and x.year == 2019
+    assert x.url == "https://pubmed.ncbi.nlm.nih.gov/42" and x.extra["pmid"] == "42"
     assert "Part one." in c.fetch(x).text
 
 
@@ -125,6 +132,27 @@ def test_search_all_collects_partial_results_when_one_connector_fails(monkeypatc
     cands, status = registry.search_all("q", "ko")
     assert [c.title for c in cands] == ["A"]
     assert status["good"] == "ok:1" and status["bad"].startswith("error:")
+
+
+def test_search_all_timeout_is_shared_deadline(monkeypatch):
+    import time
+
+    class Slow:
+        def search(self, query, lang, limit):
+            time.sleep(0.3)
+            return []
+
+    class Fast:
+        def search(self, query, lang, limit):
+            return [base.Candidate(url="https://a", title="A", kind="web", connector="fast")]
+
+    monkeypatch.setattr(registry, "all_connectors",
+                        lambda: {"slow1": Slow(), "slow2": Slow(), "slow3": Slow(), "fast": Fast()})
+    t0 = time.monotonic()
+    cands, status = registry.search_all("q", "ko", timeout=0.1)
+    assert time.monotonic() - t0 < 0.25
+    assert status["slow1"] == status["slow2"] == status["slow3"] == "error:timeout"
+    assert status["fast"] == "ok:1" and len(cands) == 1
 
 
 def test_all_connectors_names():
