@@ -6,9 +6,12 @@ pointing at its replacement and ``resolve_code`` follows the chain.
 from __future__ import annotations
 
 import json
+import re
 from functools import lru_cache
 from pathlib import Path
 
+_CODE_RE = re.compile(r"^[A-Z]\d+$")
+FALLBACK_CODE = "Z6"  # filing spot for anything that cannot be placed
 _PATH = Path(__file__).with_name("frame") / "taxonomy.json"
 
 _DOMAIN_AREA = {
@@ -57,22 +60,40 @@ def domain_to_area(domain: str) -> str:
 
 def validate() -> list[str]:
     problems: list[str] = []
-    seen: set[str] = set()
-    all_codes: set[str] = set()
-    for a in load()["areas"]:
-        for f in a["fields"]:
-            all_codes.add(f["code"])
-    for a in load()["areas"]:
+    areas = load()["areas"]
+    area_codes: set[str] = set()
+    owner: dict[str, str] = {}
+    for a in areas:
+        if a["code"] in area_codes:
+            problems.append(f"duplicate area {a['code']}")
+        area_codes.add(a["code"])
         for f in a["fields"]:
             c = f["code"]
-            if c in seen:
+            if not _CODE_RE.match(c):
+                problems.append(f"bad code format {c}")
+            if c in owner:
                 problems.append(f"duplicate code {c}")
-            seen.add(c)
+            owner[c] = a["code"]
             if not c.startswith(a["code"]):
                 problems.append(f"{c} does not belong to area {a['code']}")
-            dep = f.get("deprecated_to")
-            if dep and dep not in all_codes:
-                problems.append(f"{c}.deprecated_to {dep} is unknown")
+    for c in owner:
+        dep = next(f for a in areas for f in a["fields"] if f["code"] == c).get("deprecated_to")
+        if not dep:
+            continue
+        if dep == c:
+            problems.append(f"{c}.deprecated_to points to itself")
+        elif dep not in owner:
+            problems.append(f"{c}.deprecated_to {dep} is unknown")
+    f = fields()
+    for c in owner:
+        cur, seen = c, {c}
+        while f[cur].get("deprecated_to") in f:
+            cur = f[cur]["deprecated_to"]
+            if cur in seen:
+                if f[c].get("deprecated_to") != c:
+                    problems.append(f"deprecated_to cycle at {c}")
+                break
+            seen.add(cur)
     return problems
 
 
@@ -80,6 +101,10 @@ def field_prompt_list() -> str:
     lines = []
     for a in load()["areas"]:
         for f in a["fields"]:
-            if not f.get("deprecated_to"):
-                lines.append(f"{f['code']} {f['name_ko']} ({f['name_en']})")
+            if f.get("deprecated_to") or f.get("fallback"):
+                continue
+            line = f"{f['code']} {f['name_ko']} ({f['name_en']})"
+            if f.get("note"):
+                line += f" — {f['note']}"
+            lines.append(line)
     return "\n".join(lines)

@@ -9,9 +9,10 @@
    "fields": [
     {
      "code": "A1",
-     "name_ko": "논리·집합",
+     "name_ko": "논리·집합(형식논리)",
      "name_en": "Logic & Sets",
-     "deprecated_to": null
+     "deprecated_to": null,
+     "note": "언어철학은 K4"
     },
     {
      "code": "A2",
@@ -33,9 +34,10 @@
     },
     {
      "code": "A5",
-     "name_ko": "확률·통계",
+     "name_ko": "확률·통계(이론)",
      "name_en": "Probability & Statistics",
-     "deprecated_to": null
+     "deprecated_to": null,
+     "note": "사회조사 데이터는 I7"
     },
     {
      "code": "A6",
@@ -102,7 +104,8 @@
      "code": "B6",
      "name_ko": "유체·음향",
      "name_en": "Fluids & Acoustics",
-     "deprecated_to": null
+     "deprecated_to": null,
+     "note": "물리 원리; 음향기기는 F10"
     },
     {
      "code": "B7",
@@ -173,9 +176,10 @@
     },
     {
      "code": "C8",
-     "name_ko": "에너지·전지",
-     "name_en": "Energy & Batteries",
-     "deprecated_to": null
+     "name_ko": "전지·전기화학",
+     "name_en": "Batteries & Electrochemistry",
+     "deprecated_to": null,
+     "note": "에너지 정책은 E6, 발전·설비는 F9"
     },
     {
      "code": "C9",
@@ -230,7 +234,8 @@
      "code": "D7",
      "name_ko": "진화·생태",
      "name_en": "Evolution & Ecology",
-     "deprecated_to": null
+     "deprecated_to": null,
+     "note": "고생물·지구사는 E8, 동물 행동은 O3"
     },
     {
      "code": "D8",
@@ -240,9 +245,10 @@
     },
     {
      "code": "D9",
-     "name_ko": "약학·영양",
-     "name_en": "Pharmacology & Nutrition",
-     "deprecated_to": null
+     "name_ko": "약학·약리",
+     "name_en": "Pharmacy & Pharmacology",
+     "deprecated_to": null,
+     "note": "식단·영양은 N2"
     },
     {
      "code": "D10",
@@ -289,8 +295,8 @@
     },
     {
      "code": "E6",
-     "name_ko": "자원·에너지",
-     "name_en": "Resources & Energy",
+     "name_ko": "자원·에너지·환경정책",
+     "name_en": "Resources, Energy & Environmental Policy",
      "deprecated_to": null
     },
     {
@@ -334,7 +340,8 @@
      "code": "F4",
      "name_ko": "토목·건축",
      "name_en": "Civil & Architecture",
-     "deprecated_to": null
+     "deprecated_to": null,
+     "note": "건축미학 포함"
     },
     {
      "code": "F5",
@@ -362,15 +369,16 @@
     },
     {
      "code": "F9",
-     "name_ko": "에너지공학",
-     "name_en": "Energy Engineering",
+     "name_ko": "에너지공학·발전",
+     "name_en": "Energy & Power Engineering",
      "deprecated_to": null
     },
     {
      "code": "F10",
-     "name_ko": "오디오·영상 기술",
+     "name_ko": "오디오·영상 기술(공학)",
      "name_en": "Audio & Video Technology",
-     "deprecated_to": null
+     "deprecated_to": null,
+     "note": "창작 사운드디자인은 M2"
     }
    ]
   },
@@ -407,7 +415,8 @@
      "code": "G5",
      "name_ko": "인공지능·머신러닝",
      "name_en": "AI & Machine Learning",
-     "deprecated_to": null
+     "deprecated_to": null,
+     "note": "사용법·프롬프트는 Z4"
     },
     {
      "code": "G6",
@@ -490,9 +499,10 @@
     },
     {
      "code": "H8",
-     "name_ko": "의식·수면·꿈",
-     "name_en": "Consciousness, Sleep & Dreams",
-     "deprecated_to": null
+     "name_ko": "의식·꿈·주의",
+     "name_en": "Consciousness, Dreams & Attention",
+     "deprecated_to": null,
+     "note": "수면 습관은 N4"
     },
     {
      "code": "H9",
@@ -545,8 +555,8 @@
     },
     {
      "code": "I7",
-     "name_ko": "통계·조사·데이터사회",
-     "name_en": "Social Statistics & Survey",
+     "name_ko": "사회조사·데이터분석",
+     "name_en": "Social Survey & Data Analysis",
      "deprecated_to": null
     },
     {
@@ -576,38 +586,38 @@
    "fields": [
     {
      "code": "J1",
-     "name_ko": "고대사",
-     "name_en": "Ancient History",
-     "deprecated_to": null
-    },
-    {
-     "code": "J2",
-     "name_ko": "중세사",
-     "name_en": "Medieval History",
-     "deprecated_to": null
-    },
-    {
-     "code": "J3",
-     "name_ko": "근현대사",
-     "name_en": "Modern History",
-     "deprecated_to": null
-    },
-    {
-     "code": "J4",
      "name_ko": "한국사",
      "name_en": "Korean History",
      "deprecated_to": null
     },
     {
-     "code": "J5",
-     "name_ko": "동아시아사",
+     "code": "J2",
+     "name_ko": "동아시아사(중국·일본)",
      "name_en": "East Asian History",
      "deprecated_to": null
     },
     {
-     "code": "J6",
-     "name_ko": "서양사",
+     "code": "J3",
+     "name_ko": "서양사(유럽·북미)",
      "name_en": "Western History",
+     "deprecated_to": null
+    },
+    {
+     "code": "J4",
+     "name_ko": "중동·이슬람사",
+     "name_en": "Middle Eastern & Islamic History",
+     "deprecated_to": null
+    },
+    {
+     "code": "J5",
+     "name_ko": "남아시아·동남아시아사",
+     "name_en": "South & Southeast Asian History",
+     "deprecated_to": null
+    },
+    {
+     "code": "J6",
+     "name_ko": "아프리카·아메리카·오세아니아사",
+     "name_en": "African, American & Oceanian History",
      "deprecated_to": null
     },
     {
@@ -618,20 +628,20 @@
     },
     {
      "code": "J8",
-     "name_ko": "과학기술사",
-     "name_en": "History of Science & Technology",
+     "name_ko": "세계사·문명교류",
+     "name_en": "World History & Cultural Exchange",
      "deprecated_to": null
     },
     {
      "code": "J9",
-     "name_ko": "전쟁·군사사",
-     "name_en": "Military History",
+     "name_ko": "과학기술사·경제사",
+     "name_en": "History of Science, Technology & Economy",
      "deprecated_to": null
     },
     {
      "code": "J10",
-     "name_ko": "지역·세계사",
-     "name_en": "Regional & World History",
+     "name_ko": "사학사·역사이론",
+     "name_en": "Historiography & Theory of History",
      "deprecated_to": null
     }
    ]
@@ -649,8 +659,8 @@
     },
     {
      "code": "K2",
-     "name_ko": "인식론·과학철학",
-     "name_en": "Epistemology & Philosophy of Science",
+     "name_ko": "과학철학·방법론",
+     "name_en": "Philosophy of Science & Methodology",
      "deprecated_to": null
     },
     {
@@ -661,8 +671,8 @@
     },
     {
      "code": "K4",
-     "name_ko": "논리·언어철학",
-     "name_en": "Logic & Philosophy of Language",
+     "name_ko": "인식론·언어철학",
+     "name_en": "Epistemology & Philosophy of Language",
      "deprecated_to": null
     },
     {
@@ -691,14 +701,14 @@
     },
     {
      "code": "K9",
-     "name_ko": "기타 종교·신화",
-     "name_en": "Other Religions & Mythology",
+     "name_ko": "이슬람·유대교",
+     "name_en": "Islam & Judaism",
      "deprecated_to": null
     },
     {
      "code": "K10",
-     "name_ko": "종교학·영성",
-     "name_en": "Religious Studies & Spirituality",
+     "name_ko": "힌두교·인도종교·기타 신화",
+     "name_en": "Hinduism, Indian Religions & Other Mythology",
      "deprecated_to": null
     }
    ]
@@ -807,14 +817,14 @@
     },
     {
      "code": "M7",
-     "name_ko": "영화·영상·공연",
-     "name_en": "Film, Video & Performing Arts",
+     "name_ko": "영화·공연",
+     "name_en": "Film & Performing Arts",
      "deprecated_to": null
     },
     {
      "code": "M8",
-     "name_ko": "사진·건축미학",
-     "name_en": "Photography & Architectural Aesthetics",
+     "name_ko": "사진·영상예술",
+     "name_en": "Photography & Visual Media Art",
      "deprecated_to": null
     },
     {
@@ -868,14 +878,14 @@
     },
     {
      "code": "N6",
-     "name_ko": "집·가사·DIY",
-     "name_en": "Home & DIY",
+     "name_ko": "집·가사·DIY·취미",
+     "name_en": "Home, DIY & Hobbies",
      "deprecated_to": null
     },
     {
      "code": "N7",
-     "name_ko": "여행·취미",
-     "name_en": "Travel & Hobbies",
+     "name_ko": "여행·지리문화",
+     "name_en": "Travel & Geographic Culture",
      "deprecated_to": null
     },
     {
@@ -892,9 +902,10 @@
     },
     {
      "code": "N10",
-     "name_ko": "개인재무·생활법률",
-     "name_en": "Personal Finance & Daily Legal",
-     "deprecated_to": null
+     "name_ko": "개인재무",
+     "name_en": "Personal Finance",
+     "deprecated_to": null,
+     "note": "생활법률은 P2"
     }
    ]
   },
@@ -923,9 +934,10 @@
     },
     {
      "code": "O4",
-     "name_ko": "동물 건강·수의",
-     "name_en": "Animal Health & Veterinary",
-     "deprecated_to": null
+     "name_ko": "수의학·반려동물 건강",
+     "name_en": "Veterinary & Pet Health",
+     "deprecated_to": null,
+     "note": "사람 의학은 D4"
     },
     {
      "code": "O5",
@@ -966,8 +978,8 @@
     },
     {
      "code": "P2",
-     "name_ko": "민법·상법",
-     "name_en": "Civil & Commercial Law",
+     "name_ko": "민사·생활법률",
+     "name_en": "Civil, Commercial & Everyday Law",
      "deprecated_to": null
     },
     {
@@ -1021,14 +1033,14 @@
    "fields": [
     {
      "code": "Z1",
-     "name_ko": "학습법",
-     "name_en": "Learning Methods",
+     "name_ko": "학습법·기억술",
+     "name_en": "Learning Methods & Mnemonics",
      "deprecated_to": null
     },
     {
      "code": "Z2",
-     "name_ko": "도구·소프트웨어",
-     "name_en": "Tools & Software",
+     "name_ko": "도구·소프트웨어·지식관리",
+     "name_en": "Tools, Software & Knowledge Management",
      "deprecated_to": null
     },
     {
@@ -1039,21 +1051,23 @@
     },
     {
      "code": "Z4",
-     "name_ko": "생산성·지식관리",
-     "name_en": "Productivity & Knowledge Management",
-     "deprecated_to": null
+     "name_ko": "AI 활용·프롬프트",
+     "name_en": "AI Usage & Prompting",
+     "deprecated_to": null,
+     "note": "기술 자체는 G5"
     },
     {
      "code": "Z5",
-     "name_ko": "AI 활용·프롬프트",
-     "name_en": "AI Usage & Prompting",
+     "name_ko": "글쓰기·발표·설명법",
+     "name_en": "Writing, Presenting & Explaining",
      "deprecated_to": null
     },
     {
      "code": "Z6",
-     "name_ko": "미분류·기타",
-     "name_en": "Unclassified & Other",
-     "deprecated_to": null
+     "name_ko": "미분류",
+     "name_en": "Unclassified (fallback)",
+     "deprecated_to": null,
+     "fallback": true
     }
    ]
   }
