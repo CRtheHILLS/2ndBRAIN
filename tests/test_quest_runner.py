@@ -1,5 +1,6 @@
 """Quest runner (Task 11): stage state machine + thinker-agnostic task protocol."""
 import json
+import re
 
 import pytest
 
@@ -25,6 +26,12 @@ def _batch_dict():
                       for i in range(1, 6)]}
 
 
+def _lesson_dict(n):
+    return {"n": n, "big_idea_one_line": f"{n}일차 한 줄", "story_opening": "이야기",
+            "dots": [{"concept_ko": f"개념{n}1", "one_line": "한 줄"}],
+            "quiz": [{"q": "질문", "a": "답"}] * 3}
+
+
 class FakeThink:
     def __init__(self):
         self.calls = []
@@ -38,7 +45,10 @@ class FakeThink:
         answer = self.classify_answers.pop(0) if scripted else None
         if self.unavailable or (scripted and answer is None):
             raise think.ThinkUnavailable(["anthropic: no key", "gemini: no key"])
-        data = answer or (_plan_dict(self.plan_days) if kind == "plan" else _batch_dict())
+        if kind == "teach":
+            data = _lesson_dict(int(re.search(r"Day (\d+)/", user).group(1)))
+        else:
+            data = answer or (_plan_dict(self.plan_days) if kind == "plan" else _batch_dict())
         return think.ThinkResult(data, "fake", "fake-1", 10, 20, 0.01)
 
 
@@ -76,7 +86,9 @@ def test_run_plan_then_collect_then_classify_with_fakes(fakes):
     assert q["summary"]["stage"] == "done"
     assert q["summary"]["n_concepts"] >= 1
     assert q["summary"]["n_sources"] == q["budget"]["sources"] >= 1
-    assert q["summary"]["pages"] == {} and q["summary"]["bridges"] == 0
+    assert q["summary"]["pages"]["index"] == f"/site/quests/{slug}/index.html"
+    assert len(q["summary"]["pages"]["days"]) == 2 and q["summary"]["bridges"] == 0
+    assert fakes.calls.count("teach") == 2
     assert q["summary"]["classify_remaining"] == 0
     assert q["budget"]["think_calls"] == len(fakes.calls)
     assert graph.get_node(f"quest:{slug}")["kind"] == "quest"
@@ -114,8 +126,13 @@ def test_submitted_classify_task_is_used_on_resume(fakes):
     tid = out["summary"]["waiting_task"]
     quest.submit_task(slug, tid, _batch_dict())
     out = quest.run(slug)  # still no API thinker: only the submitted batch can help
-    assert out["status"] == "done"  # 4 raw files = one batch, answered by the submission
+    assert out["stage_done"][:3] == ["plan", "collect", "classify"]  # 4 raw files = one batch
     assert out["summary"]["n_concepts"] >= 1
+    for n in (1, 2):  # teach parks per day and resumes from each submitted lesson
+        assert out["status"] == "waiting_thinker" and out["summary"]["waiting_task"] == f"teach-day-{n}"
+        quest.submit_task(slug, f"teach-day-{n}", _lesson_dict(n))
+        out = quest.run(slug)
+    assert out["status"] == "done"
     assert quest.open_tasks(slug) == []
 
 

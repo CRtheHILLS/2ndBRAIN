@@ -107,8 +107,48 @@ class SourceLedger(BaseModel):
     new_connectors_tried: list[str] = Field(default_factory=list)
 
 
+GRADES = ("확립됨", "연구중", "추측", "상술")
+
+
+class DotCard(BaseModel):
+    concept_id: str = ""
+    concept_ko: str
+    one_line: str
+    picture_svg: str = ""
+    emoji: str = ""
+    analogy: str = ""
+    real_example: str = ""
+    why_it_matters: str = ""
+    evidence_grade: Literal["확립됨", "연구중", "추측", "상술"] = "확립됨"
+    sources: list[str] = Field(default_factory=list)
+
+    @field_validator("evidence_grade", mode="before")
+    @classmethod
+    def _coerce_grade(cls, v):
+        g = "".join(str(v).split())  # "연구 중" -> "연구중"
+        return g if g in GRADES else "연구중"
+
+
+class QuizItem(BaseModel):
+    q: str
+    a: str
+    why: str = ""
+
+
+class DayLesson(BaseModel):
+    n: int
+    big_idea_one_line: str
+    story_opening: str
+    dots: list[DotCard]
+    quiz: list[QuizItem] = Field(default_factory=list)
+    say_it_yourself: str = ""
+    link_yesterday: str = ""
+    clair_one_liner: str = ""
+
+
 # schema name (as stored in a quest task file) -> model class
 SCHEMAS: dict[str, type[BaseModel]] = {
     "QuestPlan": QuestPlan,
     "CatalogBatch": CatalogBatch,
+    "DayLesson": DayLesson,
 }

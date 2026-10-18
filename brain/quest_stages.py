@@ -135,10 +135,127 @@ def stage_classify(slug: str) -> None:
     quest.save(slug, q)
 
 
-# --- later tasks --------------------------------------------------------------
+# --- teach --------------------------------------------------------------------
 
-def stage_teach(slug: str) -> None:  # Task 12
-    pass
+TEACH_MAX_CHARS = 12_000
+_KIND_KO = {"skill": "몸으로 익히는 기술", "topic": "이해하고 싶은 주제", "question": "여러 주장이 엮인 물음"}
+
+
+def _dot_excerpts(slug: str, dot: dict) -> list[str]:
+    from . import retrieve  # local: keeps this file's import line untouched for parallel tasks
+    hits = retrieve.excerpts(dot["concept_ko"], slug, k=3)
+    if not hits and dot.get("concept_en"):
+        hits = retrieve.excerpts(dot["concept_en"], slug, k=3)
+    return [f"   [출처: {h['title']}] {' '.join(h['text'].split())}" for h in hits]
+
+
+def _teach_user(slug: str, q: dict, day: dict, first_n: int, prev: dict | None,
+                ledger: models.SourceLedger) -> str:
+    """Day message.  Level rules come first so no trim can drop them; when too long, trim
+    excerpts, then bridge hints, then yesterday's dot lines, and only then cut the tail."""
+    plan, n = q["plan"], day["n"]
+    level = q.get("level") or "초등"
+    head = [f"수준: {level}", prompts.TEACH_LEVEL_RULES.get(level, prompts.TEACH_LEVEL_RULES["초등"]), "",
+            f"퀘스트: {plan['title_ko']} (종류: {_KIND_KO.get(plan['kind'], plan['kind'])})",
+            f"목표: {plan['one_line_goal']}",
+            f"Day {n}/총 {len(plan['days'])}",
+            f"오늘의 큰 생각: {day['big_idea']}"]
+    h = plan.get("honesty") or {}
+    if n == first_n and any(h.get(k) for k in ("learnable_by_reading", "needs_practice", "hype_warning")):
+        head += ["", "정직 상자 (첫날이니 이야기나 점 설명에서 한 번 짚어 주기):"]
+        for key, label in (("learnable_by_reading", "읽어서 되는 것"), ("needs_practice", "몸으로 해야 하는 것"),
+                           ("hype_warning", "과장 주의")):
+            if h.get(key):
+                head.append(f"- {label}: {', '.join(h[key])}")
+    head += ["", "오늘의 점:"]
+    dots = []  # (lines, excerpts) per dot
+    for i, d in enumerate(day["dots"], 1):
+        en = f" ({d['concept_en']})" if d.get("concept_en") else ""
+        urls = list(dict.fromkeys(s.url for s in ledger.sources if s.fetched and s.dot == d["concept_ko"]))
+        why = f" — {d['why_one_line']}" if d.get("why_one_line") else ""
+        lines = [f"{i}. {d['concept_ko']}{en}{why} — 증거 힌트: {d.get('evidence_grade_hint') or '연구중'}",
+                 "   쓸 수 있는 출처 URL: " + (" , ".join(urls) if urls else "(없음 — sources는 빈 배열)"),
+                 "   자료 발췌:"]
+        dots.append((lines, _dot_excerpts(slug, d)))
+    yesterday = [f"- {c['concept_ko']}: {c['one_line']}" for c in prev["dots"]] if prev else []
+    bridges = [f"- {b['target']}: {b.get('why') or ''}".rstrip(": ") for b in plan.get("bridge_hints") or []]
+
+    def build() -> str:
+        body = [line for lines, exs in dots for line in (*lines, *(exs or ["   (발췌 없음)"]))]
+        tail = []
+        if prev:
+            tail += ["", "어제 배운 것:", f"- 큰 생각: {prev['big_idea_one_line']}", *yesterday]
+        if bridges:
+            tail += ["", "다른 분야와 이어질 만한 곳:", *bridges]
+        return "\n".join(head + body + tail)
+
+    msg = build()
+    while len(msg) > TEACH_MAX_CHARS and any(exs for _, exs in dots):
+        max(dots, key=lambda d: len(d[1]))[1].pop()
+        msg = build()
+    if len(msg) > TEACH_MAX_CHARS and bridges:
+        bridges.clear()
+        msg = build()
+    while len(msg) > TEACH_MAX_CHARS and yesterday:
+        yesterday.pop()
+        msg = build()
+    return msg[:TEACH_MAX_CHARS]
+
+
+def _fill_concept_ids(lesson: dict, day: dict) -> None:
+    from . import canon
+    en_by_ko = {d["concept_ko"]: d.get("concept_en") or "" for d in day["dots"]}
+    for d in lesson["dots"]:
+        if d["concept_ko"].strip():
+            d["concept_id"] = canon.canon(d["concept_ko"], en_by_ko.get(d["concept_ko"], ""))
+
+
+def _link_lesson(slug: str, title_ko: str, lesson: dict) -> None:
+    lid = f"lesson:{slug}:day-{lesson['n']}"
+    graph.upsert_node(lid, "lesson", f"{title_ko} Day {lesson['n']}", summary=lesson["big_idea_one_line"])
+    for cid in dict.fromkeys(d["concept_id"] for d in lesson["dots"] if d["concept_id"]):
+        graph.add_edge(cid, lid, "taught_in")
+    graph.add_edge(lid, f"book:{slug}", "in_book")
+
+
+def stage_teach(slug: str) -> None:
+    from . import render
+    q = quest.load(slug)
+    plan = q["plan"]
+    days = sorted(plan["days"], key=lambda d: d["n"])
+    system = prompts.teach_system(q.get("level") or "초등")
+    ledger = quest.load_ledger(slug)
+    site = f"/site/quests/{slug}"
+    prev, day_pages, day1 = None, [], ""
+    for day in days:
+        n = day["n"]
+        lesson = render.load_day(slug, n)
+        if lesson is None:
+            user = _teach_user(slug, q, day, days[0]["n"], prev, ledger)
+            data = quest.think_or_cached(slug, f"teach-day-{n}", "teach", system, user, models.DayLesson,
+                                         context={"day": n})
+            lesson = models.DayLesson.model_validate(data).model_dump()
+            lesson["n"] = n
+            _fill_concept_ids(lesson, day)
+            _link_lesson(slug, plan["title_ko"], lesson)
+            p = quest.quest_dir(slug) / "days" / f"day-{n}.json"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(lesson, ensure_ascii=False, indent=2), "utf-8")
+            render.render_quest_day(slug, n)
+            quest.log(slug, event="teach_day", day=n, dots=len(lesson["dots"]))
+        elif not (store.site_dir() / "quests" / slug / f"day-{n}.html").exists():
+            render.render_quest_day(slug, n)
+        day_pages.append(f"{site}/day-{n}.html")
+        day1 = day1 or lesson["big_idea_one_line"]
+        prev = lesson
+    render.render_quest(slug)
+    q = quest.load(slug)  # think_or_cached saved the budget meanwhile
+    q["summary"]["pages"] = {"index": f"{site}/index.html", "days": day_pages}
+    q["summary"]["day1_big_idea"] = day1
+    quest.save(slug, q)
+
+
+# --- later tasks --------------------------------------------------------------
 
 
 def stage_bridge(slug: str) -> None:  # Task 15
