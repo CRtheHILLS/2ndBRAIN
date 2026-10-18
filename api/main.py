@@ -8,7 +8,7 @@ from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depe
 from fastapi.responses import RedirectResponse, PlainTextResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from brain import store, ingest, distill, render, index, levels, catalog
+from brain import store, ingest, distill, render, index, levels, catalog, think
 from brain.config import get_settings
 from brain.ingest import _sanitize_filename
 from brain.slug import slugify
@@ -604,8 +604,11 @@ def catalog_pending():
 
 
 @app.post("/catalog/learn", dependencies=[Depends(require_token)])
-def catalog_learn(limit: int = 10):
-    return catalog.learn_pending(limit)
+def catalog_learn(limit: int = 10, book: str | None = None):
+    try:
+        return catalog.learn_pending(limit, book=book)
+    except think.ThinkUnavailable as e:
+        raise HTTPException(503, f"생각 담당(모델)을 지금 쓸 수 없어요: {'; '.join(e.reasons)}")
 
 
 @app.get("/catalog/graph")
