@@ -674,6 +674,11 @@ def delete_book(slug: str):
         shutil.rmtree(site)
     render.render_shelf()
     index.rebuild()
+    try:
+        from brain import vec
+        vec.delete_book(slug)
+    except Exception:
+        pass
     return {"deleted": slug}
 
 
@@ -684,9 +689,10 @@ def books():
 
 @app.get("/search")
 def search(q: str, k: int = 10, mode: str = "hybrid"):
+    k = max(1, k)
     if mode == "fts":
         return index.search(q, k)
-    return retrieve.hybrid(q, k)
+    return retrieve.hybrid(q, k)  # RRF scores are not comparable to FTS bm25 scores
 
 
 # ---------------------------------------------------------------------------

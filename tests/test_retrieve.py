@@ -1,5 +1,9 @@
+import json
+from pathlib import Path
+
 import pytest
 
+from brain.config import get_settings
 from brain import index, retrieve, store
 
 
@@ -30,6 +34,22 @@ def test_hybrid_rrf_merges_three_sources_and_dedups_paths(data_dir, monkeypatch)
     assert by["site/quests/a/day-2.html"]["title"] == "양력 Day 2"
     assert by["a/raw/x.md"]["text"] == "fts-x"
     assert len(retrieve.hybrid("양력", k=2)) == 2
+
+
+def test_graph_hits_source_path_matches_both_raw_naming_styles(data_dir):
+    from brain import catalog, graph
+    # upload style: entry file is the original name, raw md is <stem>.md; quest style: file is the .md itself
+    for book, fname in (("heli", "My Book.pdf"), ("q1", "src-d01-abcd1234.md")):
+        eid = catalog.make_id(book, fname)
+        catalog.entry_path(eid).write_text(json.dumps(
+            {"id": eid, "book": book, "file": fname, "title": "T"}), "utf-8")
+        graph.upsert_node("src:" + eid[:16], "source", "T", summary="요약")
+        graph.upsert_node("c:lift", "concept", "양력")
+        graph.add_edge("src:" + eid[:16], "c:lift", "about")
+        store.write_md(store.raw_dir(book) / (Path(fname).stem + ".md"), {"title": "T"}, "본문")
+    hits = retrieve._graph_hits("양력")
+    assert {h["path"] for h in hits} == {"heli/raw/My Book.md", "q1/raw/src-d01-abcd1234.md"}
+    assert all((get_settings().data_dir / "books" / h["path"]).is_file() for h in hits)
 
 
 def test_hybrid_slug_filter(data_dir, monkeypatch):

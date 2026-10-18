@@ -86,8 +86,9 @@ def index_doc(slug: str, path: str, text: str, chunk_chars: int = 800) -> int:
         if con is None:
             return 0
         with closing(con):
-            have = {r[0] for r in con.execute("SELECT chunk_id FROM chunk_text WHERE slug=? AND path=?", (slug, path))}
-            todo = [(s, t) for s, t in _chunks(text, chunk_chars) if f"{slug}/{path}#{s}" not in have]
+            have = dict(con.execute("SELECT chunk_id, text FROM chunk_text WHERE slug=? AND path=?", (slug, path)))
+            # new chunks, plus chunks whose text changed since they were embedded
+            todo = [(s, t) for s, t in _chunks(text, chunk_chars) if have.get(f"{slug}/{path}#{s}") != t]
             if not todo:
                 return 0
             vecs = embed.embed([t for _, t in todo])
@@ -102,6 +103,23 @@ def index_doc(slug: str, path: str, text: str, chunk_chars: int = 800) -> int:
             return len(todo)
     except Exception as e:
         log.warning("index_doc failed: %s", e)
+        return 0
+
+
+def delete_book(slug: str) -> int:
+    """Drop a book's chunk rows (node vectors stay: concepts outlive books)."""
+    try:
+        con = _open()
+        if con is None:
+            return 0
+        with closing(con), con:
+            ids = [r[0] for r in con.execute("SELECT chunk_id FROM chunk_text WHERE slug=?", (slug,))]
+            for cid in ids:
+                con.execute("DELETE FROM chunk_vec WHERE chunk_id=?", (cid,))
+            con.execute("DELETE FROM chunk_text WHERE slug=?", (slug,))
+        return len(ids)
+    except Exception as e:
+        log.warning("delete_book failed: %s", e)
         return 0
 
 
@@ -141,7 +159,7 @@ def similar_nodes(text: str | None = None, node_id: str | None = None, k: int = 
             if vec is None:
                 if not text:
                     return []
-                got = embed.embed([text])
+                got = embed.embed([text], task="query")
                 if not got:
                     return []
                 vec = got[0]
@@ -160,7 +178,7 @@ def similar_chunks(text: str, k: int = 8) -> list[dict]:
         if con is None:
             return []
         with closing(con):
-            got = embed.embed([text])
+            got = embed.embed([text], task="query")
             if not got:
                 return []
             out = []
