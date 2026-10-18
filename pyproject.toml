@@ -20,6 +20,7 @@ notebooklm = ["notebooklm-py>=0.1"]
 brain-sync = "sync.watcher:main"
 brain-nblm = "sync.notebooklm_import:main"
 brain-casting-worker = "sync.casting_worker:main"
+brain-learn = "sync.learn_cli:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

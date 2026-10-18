@@ -53,6 +53,33 @@ curl -X POST -H "X-Brain-Token: <BRAIN_TOKEN>" \
   "https://<app>.up.railway.app/books/<slug>/process?level=초등"
 ```
 
+## 학습 퀘스트 — 한 문장으로 배우기
+
+Clair에게 "나 헬리콥터 운전 배우고 싶어"처럼 한 문장만 말하면 돼요. 서버가 계획 → 자료 모으기 →
+분류 → 수업 만들기 → 예전 지식과 잇기 → 보관까지 알아서 하고, 초등 눈높이 7일 코스를 만들어 줘요.
+
+```bash
+brain-learn start "나 헬리콥터 운전 배우고 싶어" [--days 3] [--level 일반]   # 시작 + 진행 지켜보기
+brain-learn list                       # 퀘스트 목록
+brain-learn status <slug>              # 상태 한 번 확인
+brain-learn watch <slug>               # 끝날 때까지 지켜보기 (완료 0 · 실패 1 · 생각 담당 필요 3)
+brain-learn tasks <slug> --out DIR     # 기다리는 생각 과제 내려받기
+brain-learn submit <slug> <task_id> 답.json
+brain-learn resume <slug>              # 멈춘 퀘스트 다시 시작
+brain-learn rerender <slug> --level 일반
+brain-learn ask "질문"                  # 내 지식 창고에서 먼저 찾아 답하기
+```
+
+`--url`/`--token`을 생략하면 환경변수 `BRAIN_URL`, `BRAIN_TOKEN`을 써요. 설치 없이 쓰려면
+`.venv/Scripts/python -m sync.learn_cli ...`로 실행해요.
+
+결과 페이지는 `/site/quests/<slug>/index.html`(지도)와 그 아래 Day 1~7 페이지에 생겨요.
+
+서버에 쓸 수 있는 모델 키가 없으면 퀘스트가 `waiting_thinker`로 멈추는데, 이때는 Clair가
+`tasks`로 과제를 받아 직접 풀고 `submit`으로 돌려줘요. 세션이 끊겨도 서버가 30분마다 다시 시도해요.
+
+서버 환경변수: `GEMINI_API_KEY`, `XAI_API_KEY`(생각을 맡길 모델 키), `THINK_PROVIDERS`(쓸 순서, 예: `gemini,xai`).
+
 ## API 엔드포인트
 
 | Method | Path | 인증 | 설명 |
