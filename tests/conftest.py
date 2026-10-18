@@ -1,5 +1,20 @@
+import socket
+
 import pytest
 from brain import config
+from brain.connectors import base
+
+
+@pytest.fixture(autouse=True)
+def _offline_public_dns():
+    """No DNS in tests: every host 'resolves' to a public address (SSRF tests swap this back).
+
+    Set by hand, not via ``monkeypatch``, so other files' autouse fixtures keep their teardown order.
+    """
+    saved = base._getaddrinfo
+    base._getaddrinfo = lambda host, port: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+    yield
+    base._getaddrinfo = saved
 
 
 @pytest.fixture

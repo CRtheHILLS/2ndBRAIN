@@ -1,6 +1,8 @@
 """Connector base types: Candidate, Doc, Connector protocol, URL normalization, HTTP helper."""
 from __future__ import annotations
 
+import ipaddress
+import socket
 import threading
 from typing import Literal, Protocol
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -62,6 +64,64 @@ def normalize_url(url: str) -> str:
     return urlunsplit((scheme, host, path, query, ""))
 
 
+PRIVATE_MSG = "비공개 주소는 가져오지 않아요"
+_BLOCKED_HOSTS = ("localhost",)
+_BLOCKED_SUFFIXES = (".localhost", ".internal")  # covers *.railway.internal
+
+
+def _system_getaddrinfo(host: str, port: int):
+    return socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+
+
+_getaddrinfo = _system_getaddrinfo  # tests swap this; production resolves for real
+
+
+def is_public_url(url: str) -> bool:
+    """http(s) URL whose host resolves only to public addresses (SSRF guard).
+
+    Rejects loopback, private (10/8, 172.16/12, 192.168/16), link-local (169.254/16),
+    unique-local (fc00::/7), ``localhost`` and ``*.internal``; resolution failure -> False.
+    """
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https"):
+        return False
+    host = (parts.hostname or "").lower().rstrip(".")
+    if not host or host in _BLOCKED_HOSTS or host.endswith(_BLOCKED_SUFFIXES):
+        return False
+    try:
+        infos = _getaddrinfo(host, port or (443 if parts.scheme == "https" else 80))
+    except (OSError, UnicodeError, ValueError):
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])
+        except ValueError:
+            return False
+        if ip.version == 6 and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        if (ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_multicast
+                or ip.is_reserved or ip.is_unspecified or not ip.is_global):
+            return False
+    return True
+
+
+def _guard(url: str) -> None:
+    if not is_public_url(url):
+        raise ValueError(PRIVATE_MSG)
+
+
+def _check_redirect(r: httpx.Response) -> None:
+    """Event hook: every redirect hop must also point at a public address."""
+    if r.is_redirect:
+        _guard(str(r.url.join(r.headers.get("location", ""))))
+
+
 _client: httpx.Client | None = None
 _client_lock = threading.Lock()
 
@@ -70,7 +130,8 @@ def _get_client() -> httpx.Client:
     global _client
     with _client_lock:
         if _client is None:
-            _client = httpx.Client(headers={"User-Agent": UA}, follow_redirects=True)
+            _client = httpx.Client(headers={"User-Agent": UA}, follow_redirects=True,
+                                   event_hooks={"response": [_check_redirect]})
         return _client
 
 
@@ -84,6 +145,7 @@ def close_client() -> None:
 
 def http_get(url: str, params: dict | None = None, timeout: float = 20,
              headers: dict | None = None) -> httpx.Response:
+    _guard(url)
     r = _get_client().get(url, params=params, timeout=timeout, headers=headers)
     r.raise_for_status()
     return r
@@ -91,6 +153,7 @@ def http_get(url: str, params: dict | None = None, timeout: float = 20,
 
 def http_download(url: str, max_bytes: int, timeout: float = 30) -> tuple[bytes, str]:
     """Stream a GET, never buffering more than max_bytes. Rejects oversized Content-Length."""
+    _guard(url)
     with _get_client().stream("GET", url, timeout=timeout) as r:
         r.raise_for_status()
         declared = r.headers.get("content-length", "")

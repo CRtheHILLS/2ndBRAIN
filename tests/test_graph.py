@@ -140,7 +140,8 @@ def test_graph_api(data_dir):
     c = TestClient(app)
     h = {"X-Brain-Token": "test-token"}
     graph.ingest_card(_entry())
-    assert c.get("/graph/stats").json()["concepts"] == 2
+    assert c.get("/graph/stats").status_code == 401
+    assert c.get("/graph/stats", headers=h).json()["concepts"] == 2
     assert c.get("/graph?center=중첩").status_code in (401, 403)
     assert c.get("/graph", headers=h).status_code == 400
     assert c.get("/graph?center=중첩", headers=h).json()["center"] == "중첩"
