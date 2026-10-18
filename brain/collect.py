@@ -101,8 +101,14 @@ def run_dot(slug: str, day: int, dot: Dot, quota: int, ledger: SourceLedger,
         if dot.concept_en:
             queries.append((dot.concept_en, "en"))
     pool: dict[str, Candidate] = {}
-    for q, lang in queries:
-        found, status = registry.search_all(q, lang)
+    # xAI web search is a paid model call: only the first Korean query gets it
+    xai_q = next((i for i, (_, lang) in enumerate(queries) if lang == "ko"), None)
+    no_xai = [n for n in registry.all_connectors() if n != "xai"]
+    for i, (q, lang) in enumerate(queries):
+        if i == xai_q:
+            found, status = registry.search_all(q, lang)
+        else:
+            found, status = registry.search_all(q, lang, names=no_xai)
         _merge_status(ledger, status)
         for c in found:
             c.extra["score"] = score(c, lang, dot.prefer_kinds)
@@ -184,6 +190,8 @@ def collect_quest(slug: str, plan: QuestPlan) -> SourceLedger:
     saved = 0
     reserve = min(3, len(plan.special_sources))
     dots = [(day.n, dot) for day in plan.days for dot in day.dots]
+    from .connectors import xai_search
+    xai_search.CURRENT_LOG = quest.quest_dir(slug) / "log.jsonl"
     try:
         for i, (n, dot) in enumerate(dots):
             remaining = s.quest_max_sources - reserve - saved
@@ -198,5 +206,6 @@ def collect_quest(slug: str, plan: QuestPlan) -> SourceLedger:
         ledger.new_connectors_tried = [n for n, row in ledger.connector_status.items() if row["results"] > 0]
         index.rebuild()
     finally:
+        xai_search.CURRENT_LOG = None
         quest.save_ledger(slug, ledger)
     return ledger

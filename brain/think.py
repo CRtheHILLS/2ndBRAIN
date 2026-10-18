@@ -130,10 +130,21 @@ def _usage_path() -> Path:
 
 
 def daily_count() -> int:
+    """Think calls today (``search`` rows from the xAI connector are metered but not counted)."""
     p = _usage_path()
     if not p.is_file():
         return 0
-    return sum(1 for line in p.read_text("utf-8").splitlines() if line.strip())
+    n = 0
+    for line in p.read_text("utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            if json.loads(line).get("kind") == "search":
+                continue
+        except (ValueError, AttributeError):
+            pass
+        n += 1
+    return n
 
 
 def record_usage(kind: str, provider: str, model: str, input_tokens: int, output_tokens: int,

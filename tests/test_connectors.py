@@ -302,3 +302,21 @@ def test_vault_fetch_returns_none_on_bad_file(data_dir):
     (d / "bad.md").write_bytes(b"---\n: [unclosed\n---\n\xff\xfe body")
     c = Candidate(url="vault://qm/notes/bad.md", title="t", kind="textbook", connector="vault")
     assert vault.fetch(c) is None
+
+
+@respx.mock
+def test_xai_search_records_usage_to_daily_file_and_quest_log(data_dir, monkeypatch):
+    import json as _json
+    from brain import quest, quest_stages, think
+    _set_xai_key(monkeypatch, "k")
+    respx.post("https://api.x.ai/v1/responses").mock(return_value=httpx.Response(200, json={
+        "model": "grok-fast", "usage": {"input_tokens": 1_000_000, "output_tokens": 2_000_000},
+        "output": [{"type": "message", "content": [{"type": "output_text", "text": "[]"}]}]}))
+    slug = quest.create("헬리콥터")["slug"]
+    monkeypatch.setattr(xai_search, "CURRENT_LOG", quest.quest_dir(slug) / "log.jsonl")
+    xai_search.search("q", "ko", 2)
+    daily = [_json.loads(x) for x in think._usage_path().read_text("utf-8").splitlines()]
+    assert daily == [dict(daily[0], kind="search", provider="xai", model="grok-fast",
+                          **{"in": 1_000_000, "out": 2_000_000})]
+    assert think.daily_count() == 0  # search rows do not eat the think cap
+    assert quest_stages._estimate_cost(slug) == round(0.2 + 2 * 0.5, 4)
