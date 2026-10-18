@@ -39,3 +39,25 @@ def test_plan_system_content():
     for w in ["확립됨", "연구중", "추측", "상술", "7일 뒤 CR은", "special_sources", "bridge_hints",
               "question", "큰 그림", "부품", "원리", "실제", "위험", "연결", "종합", "JSON 하나만"]:
         assert w in s, w
+
+
+def _skeleton(text):
+    import json
+    a = text.index("<<<JSON 예시>>>") + len("<<<JSON 예시>>>")
+    b = text.index("<<<끝>>>")
+    return json.loads(text[a:b])
+
+
+def test_plan_system_skeleton_validates():
+    s = prompts.plan_system(7)
+    for w in ['"honesty"', '"learnable_by_reading"', '"bridge_hints"']:
+        assert w in s
+    plan = models.QuestPlan.model_validate(_skeleton(s))
+    assert isinstance(plan.honesty, models.Honesty) and plan.honesty.hype_warning == ["…"]
+
+
+def test_teach_and_catalog_skeletons_validate():
+    d = models.DayLesson.model_validate(_skeleton(prompts.teach_system("초등")))
+    assert len(d.quiz) == 3
+    c = models.CatalogBatch.model_validate(_skeleton(prompts.catalog_batch_system()))
+    assert c.cards[0].index == 1
