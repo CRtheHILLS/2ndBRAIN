@@ -148,6 +148,17 @@ def learned() -> list[dict]:
     return out
 
 
+def find_entry_by_prefix(prefix: str) -> dict | None:
+    """The learned entry whose id starts with ``prefix`` (e.g. the 16 hex of a ``src:`` node)."""
+    if not prefix:
+        return None
+    for p in sorted(entries_dir().glob(f"{prefix}*.json")):
+        d = get_entry(p.stem)
+        if d:
+            return d
+    return None
+
+
 def get_entry(entry_id: str) -> dict | None:
     p = entry_path(entry_id)
     if not p.is_file():
