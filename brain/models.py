@@ -146,9 +146,24 @@ class DayLesson(BaseModel):
     clair_one_liner: str = ""
 
 
+class Citation(BaseModel):
+    title: str
+    url: str = ""
+    slug: str = ""
+    path: str = ""
+
+
+class AskAnswer(BaseModel):
+    answer_html: str
+    citations: list[Citation] = Field(default_factory=list)
+    used_vault_ratio: float = 1.0
+    follow_up_quest: str = ""
+
+
 # schema name (as stored in a quest task file) -> model class
 SCHEMAS: dict[str, type[BaseModel]] = {
     "QuestPlan": QuestPlan,
     "CatalogBatch": CatalogBatch,
     "DayLesson": DayLesson,
+    "AskAnswer": AskAnswer,
 }

@@ -5,10 +5,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depends, Request
-from fastapi.responses import RedirectResponse, PlainTextResponse, HTMLResponse, FileResponse
+from typing import Literal
+
+from fastapi.responses import Response, RedirectResponse, PlainTextResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from brain import store, ingest, distill, render, index, levels, catalog, think, graph, quest, scheduler
+from brain import ask as ask_mod, vault_export
 from brain.config import get_settings
 from brain.ingest import _sanitize_filename
 from brain.slug import slugify
@@ -684,6 +687,28 @@ def books():
 @app.get("/search")
 def search(q: str, k: int = 10):
     return index.search(q, k)
+
+
+class AskBody(BaseModel):
+    q: str
+    mode: Literal["auto", "vault", "web"] = "auto"
+    level: str = "초등"
+
+
+@app.post("/ask", dependencies=[Depends(require_token)])
+def ask_route(body: AskBody):
+    if not body.q.strip():
+        raise HTTPException(400, "질문을 적어 주세요.")
+    try:
+        return ask_mod.ask(body.q.strip(), body.mode, body.level)
+    except think.ThinkUnavailable as e:
+        raise HTTPException(503, f"생각 담당(모델)을 지금 쓸 수 없어요: {'; '.join(e.reasons)}")
+
+
+@app.get("/vault.zip", dependencies=[Depends(require_token)])
+def vault_zip():
+    return Response(vault_export.build_zip(), media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="2ndbrain-vault.zip"'})
 
 
 # ---------------------------------------------------------------------------
