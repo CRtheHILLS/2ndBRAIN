@@ -27,6 +27,11 @@ concept_pairs는 concepts와 같은 개념의 한국어-영어 짝이다.
 field_code는 아래 분야 목록에서 코드 하나를 골라 그 코드만 적는다.
 어디에도 맞지 않거나 확신이 없으면 Z6을 쓴다.
 
+[JSON 예시]
+<<<JSON 예시>>>
+{{"cards": [{{"index": 1, "title": "…", "summary": "…", "domain": "과학", "field_code": "Z6", "tags": ["…"], "concepts": ["…"], "concept_pairs": [{{"ko": "…", "en": "…"}}], "entities": []}}]}}
+<<<끝>>>
+
 분야 목록:
 {fields}"""
 
@@ -67,6 +72,20 @@ PLAN_SYSTEM = """너는 CR(한국인, 비전공자)의 한 문장을 {DAYS}일�
    존재가 확실한 URL만 쓰고, 모르면 url은 비운다. 없으면 빈 배열.
 
 6. bridge_hints: 이 퀘스트가 다른 분야·개념과 이어질 만한 곳을 target과 why로 적는다.
+
+7. 출력 형식 (키 이름과 값의 타입을 정확히 지킨다)
+<<<JSON 예시>>>
+{"kind": "skill", "title_ko": "…", "title_en": "…", "one_line_goal": "{DAYS}일 뒤 CR은 …를 설명할 수 있다",
+ "honesty": {"learnable_by_reading": ["…"], "needs_practice": ["…"], "hype_warning": ["…"]},
+ "prerequisites": ["…"],
+ "days": [{"n": 1, "big_idea": "…", "dots": [{"concept_ko": "…", "concept_en": "…", "why_one_line": "…", "queries_ko": ["…"], "queries_en": ["…"], "prefer_kinds": ["encyclopedia", "paper"], "evidence_grade_hint": "확립됨"}]}],
+ "special_sources": [{"name": "…", "url": "https://…", "why": "…"}],
+ "bridge_hints": [{"target": "…", "why": "…"}]}
+<<<끝>>>
+- honesty는 반드시 세 개의 배열(learnable_by_reading, needs_practice, hype_warning)을 가진 객체다. 문자열로 쓰지 않는다.
+- days는 정확히 {DAYS}개다(예시는 1일치만 보인 것이다).
+- 모든 배열은 비어 있어도 배열로 쓴다.
+- 키 이름을 바꾸거나 빼지 않는다.
 
 참고할 분야 목록:
 {FIELDS}"""
@@ -125,7 +144,16 @@ JSON 객체 하나만 출력한다. 마크다운 펜스, 설명 문장, 인사�
 - picture_svg: viewBox="0 0 200 120"인 <svg> 하나. 원·사각형·선·화살표·짧은 글자 같은 기본 도형만 쓴다.
   도형마다 fill이나 stroke 색을 직접 적는다(밝은 화면과 어두운 화면 모두에서 보이는 중간 밝기 색).
   외부 파일·이미지·링크(href)·스크립트·이벤트 속성·style 태그는 금지. 자신 없으면 빈 문자열로 두고 emoji만 준다.
-- 모든 글은 한국어로 쓴다(필요하면 영어 원어를 괄호로 병기)."""
+- 모든 글은 한국어로 쓴다(필요하면 영어 원어를 괄호로 병기).
+
+[JSON 예시: 키 이름과 타입을 이대로 지킨다]
+<<<JSON 예시>>>
+{"n": 1, "big_idea_one_line": "…", "story_opening": "…",
+ "dots": [{"concept_ko": "…", "one_line": "…", "picture_svg": "", "emoji": "🎵", "analogy": "…", "real_example": "…", "why_it_matters": "…", "evidence_grade": "확립됨", "sources": []}],
+ "quiz": [{"q": "…", "a": "…", "why": "…"}, {"q": "…", "a": "…", "why": "…"}, {"q": "…", "a": "…", "why": "…"}],
+ "say_it_yourself": "…", "link_yesterday": "", "clair_one_liner": "…"}
+<<<끝>>>
+모든 배열은 비어 있어도 배열로 쓴다. 키 이름을 바꾸거나 빼지 않는다."""
 
 TEACH_LEVEL_RULES = {
     "초등": """초등학생도 바로 알아듣게 쓴다.

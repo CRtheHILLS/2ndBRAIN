@@ -158,6 +158,44 @@ def _reason(provider: str, e: Exception) -> str:
     return f"{provider}: {type(e).__name__}"
 
 
+def _is_transient(e: Exception) -> bool:
+    """5xx / 429 / timeout: worth one retry on the same provider's fast model."""
+    if isinstance(e, httpx.HTTPStatusError):
+        c = e.response.status_code
+        return c >= 500 or c == 429
+    if isinstance(e, httpx.TimeoutException):
+        return True
+    try:
+        import anthropic
+    except ImportError:
+        return False
+    if isinstance(e, (anthropic.RateLimitError, anthropic.InternalServerError,
+                      anthropic.APITimeoutError)):
+        return True
+    if isinstance(e, anthropic.APIStatusError):
+        c = getattr(e, "status_code", 0) or 0
+        return c >= 500 or c == 429
+    return False
+
+
+def _call_with_fast_fallback(p: str, system: str, user: str, smart: bool):
+    """-> (text, in, out, model).  A transient smart-model failure retries once on fast."""
+    model = _model_for(p, smart)
+    try:
+        return (*_call(p, system, user, model), model)
+    except Exception as e:  # noqa: BLE001
+        fast = _model_for(p, False)
+        if not (smart and _is_transient(e) and fast and fast != model):
+            raise
+        return (*_call(p, system, user, fast), fast)
+
+
+def _schema_reason(provider: str, e: ValidationError) -> str:
+    errs = e.errors()
+    path = ".".join(str(x) for x in errs[0]["loc"]) if errs else ""
+    return f"{provider}: schema: {path or '?'}"
+
+
 def complete_text(system: str, user: str, smart: bool) -> tuple[str, str, str, int, int]:
     """First provider that answers wins -> (text, provider, model, in_tok, out_tok)."""
     if daily_count() >= get_settings().think_daily_cap:
@@ -167,10 +205,9 @@ def complete_text(system: str, user: str, smart: bool) -> tuple[str, str, str, i
         if not _has_key(p):
             reasons.append(f"{p}: no key")
             continue
-        model = _model_for(p, smart)
         t0 = time.monotonic()
         try:
-            text, i, o = _call(p, system, user, model)
+            text, i, o, model = _call_with_fast_fallback(p, system, user, smart)
         except Exception as e:  # noqa: BLE001 - any failure moves the chain on
             reasons.append(_reason(p, e))
             continue
@@ -191,24 +228,27 @@ def think(kind: str, system: str, user: str, schema: type[BaseModel] | None = No
         if not _has_key(p):
             reasons.append(f"{p}: no key")
             continue
-        model = _model_for(p, smart)
+        fail = f"{p}: bad json"
         for attempt in (0, 1):
             t0 = time.monotonic()
             try:
-                text, i, o = _call(p, system, user + (RETRY_SUFFIX if attempt else ""), model)
+                text, i, o, model = _call_with_fast_fallback(
+                    p, system, user + (RETRY_SUFFIX if attempt else ""), smart)
             except Exception as e:  # noqa: BLE001
                 reasons.append(_reason(p, e))
                 break
             secs = time.monotonic() - t0
             record_usage(kind, p, model, i, o, secs, log_path)
             data = parse_json(text or "")
+            fail = f"{p}: bad json"
             if data is not None and schema is not None:
                 try:
                     data = schema.model_validate(data).model_dump()
-                except ValidationError:
+                except ValidationError as ve:
                     data = None
+                    fail = _schema_reason(p, ve)
             if data is not None:
                 return ThinkResult(data, p, model, i, o, secs)
             if attempt:
-                reasons.append(f"{p}: bad json")
+                reasons.append(fail)
     raise ThinkUnavailable(reasons)

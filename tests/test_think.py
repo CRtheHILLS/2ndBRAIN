@@ -172,3 +172,55 @@ def test_complete_text_is_metered_and_capped(data_dir, monkeypatch):
     with pytest.raises(T.ThinkUnavailable) as e:
         T.complete_text("s", "u", False)
     assert e.value.reasons == ["daily cap"]
+
+
+def _status_error(code):
+    import httpx
+    req = httpx.Request("POST", "https://x.test/")
+    return httpx.HTTPStatusError("e", request=req, response=httpx.Response(code, request=req))
+
+
+def test_smart_5xx_falls_back_to_fast_same_provider(data_dir, monkeypatch):
+    _keys(monkeypatch, g="g", x="x")
+    seen = []
+
+    def gem(s, u, m):
+        seen.append(m)
+        if m == T._model_for("gemini", True):
+            raise _status_error(503)
+        return '{"ok": true}', 1, 1
+
+    monkeypatch.setattr(T, "_gemini", gem)
+    monkeypatch.setattr(T, "_xai", _boom)
+    r = T.think("plan", "s", "u")
+    assert r.provider == "gemini"
+    assert r.model == T._model_for("gemini", False)
+    assert seen == [T._model_for("gemini", True), T._model_for("gemini", False)]
+    text, prov, model, _, _ = T.complete_text("s", "u", True)
+    assert prov == "gemini" and model == T._model_for("gemini", False)
+
+
+def test_non_transient_error_does_not_retry_fast(data_dir, monkeypatch):
+    _keys(monkeypatch, g="g")
+    calls = []
+
+    def gem(s, u, m):
+        calls.append(m)
+        raise _status_error(400)
+
+    monkeypatch.setattr(T, "_gemini", gem)
+    with pytest.raises(T.ThinkUnavailable):
+        T.think("plan", "s", "u")
+    assert len(calls) == 1
+
+
+def test_schema_failure_reason_names_field(data_dir, monkeypatch):
+    _keys(monkeypatch, x="x")
+    monkeypatch.setattr(T, "_xai", lambda s, u, m: ('{"n": "a"}', 1, 1))
+    with pytest.raises(T.ThinkUnavailable) as e:
+        T.think("classify", "s", "u", _N)
+    assert "xai: schema: n" in e.value.reasons
+    monkeypatch.setattr(T, "_xai", lambda s, u, m: ("junk", 1, 1))
+    with pytest.raises(T.ThinkUnavailable) as e:
+        T.think("classify", "s", "u", _N)
+    assert "xai: bad json" in e.value.reasons
