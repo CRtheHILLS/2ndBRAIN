@@ -22,6 +22,7 @@ brain-nblm = "sync.notebooklm_import:main"
 brain-casting-worker = "sync.casting_worker:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 [tool.setuptools.packages.find]
 include = ["brain*", "api*", "sync*"]
 [tool.setuptools.package-data]
