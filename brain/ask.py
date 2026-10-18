@@ -4,7 +4,7 @@ import html as _html
 import re
 from html.parser import HTMLParser
 
-from . import graph, models, retrieve, think
+from . import graph, models, retrieve, textutil, think
 from .connectors import registry
 from .prompts import ask_system
 
@@ -57,8 +57,16 @@ def _hits(q: str) -> list[dict]:
 
 
 def _thin(hits: list[dict]) -> bool:
+    """Is the vault too thin to answer alone?
+
+    Thin when there are fewer than 3 hits, or when fewer than 2 hits were found by at least two
+    channels (fts / vec / graph: ``len(via) >= 2``) -- one channel alone is too easily a false match.
+    Hits without channel lists (plain excerpts) fall back to the best-score rule.
+    """
     if len(hits) < 3:
         return True
+    if all(isinstance(h.get("via"), list) for h in hits):
+        return sum(1 for h in hits if len(h["via"]) >= 2) < 2
     scores = [h["score"] for h in hits if h.get("score") is not None]
     return bool(scores) and max(scores) < LOW_SCORE
 
@@ -89,8 +97,8 @@ def _record_question(q: str, passages: list[dict]) -> None:
                      if len(n["label_ko"]) >= 2 and n["label_ko"].lower() in low),
                     key=lambda n: -len(n["label_ko"]))
     targets = [n["id"] for n in inside[:3]]
-    for n in graph.search_labels(q, 3):
-        if n["kind"] == "concept" and n["id"] not in targets:
+    for n in (h for w in (textutil.tokens(q) or [q]) for h in graph.search_labels(w, 3)):
+        if n and n["kind"] == "concept" and n["id"] not in targets:
             targets.append(n["id"])
     for p in passages:
         if len(targets) >= 3:
@@ -104,12 +112,7 @@ def _record_question(q: str, passages: list[dict]) -> None:
         graph.add_edge(qid, t, "asked")
 
 
-def ask(q: str, mode: str = "auto", level: str = "초등") -> dict:
-    hits = _hits(q)
-    web_used = mode == "web" or (mode == "auto" and _thin(hits))
-    passages = [] if mode == "web" else [dict(h, web=False) for h in hits]
-    if web_used:
-        passages += _web_passages(q)
+def _think_once(q: str, level: str, passages: list[dict]) -> tuple[dict, list[int]]:
     lines = []
     for n, p in enumerate(passages, 1):
         if p.get("web"):
@@ -126,6 +129,24 @@ def ask(q: str, mode: str = "auto", level: str = "초등") -> dict:
         n = int(m)
         if 1 <= n <= len(passages) and n not in cited:
             cited.append(n)
+    return data, cited
+
+
+def ask(q: str, mode: str = "auto", level: str = "초등") -> dict:
+    """Answer from the vault; the web joins when the vault is thin, or (auto mode) when the
+    vault-only answer cited nothing -- then we think once more with web passages (max 2 thinks)."""
+    hits = _hits(q)
+    web_used = mode == "web" or (mode == "auto" and _thin(hits))
+    passages = [] if mode == "web" else [dict(h, web=False) for h in hits]
+    if web_used:
+        passages += _web_passages(q)
+    data, cited = _think_once(q, level, passages)
+    if mode == "auto" and not web_used and not cited:
+        web_used = True
+        web = _web_passages(q)
+        if web:
+            passages += web
+            data, cited = _think_once(q, level, passages)
     data["answer_html"] = sanitize_answer(data.get("answer_html", ""), set(cited))
     data["citations"] = [models.Citation(
         title=passages[n - 1].get("title", ""), url=passages[n - 1].get("url", ""),

@@ -30,8 +30,8 @@ def test_hybrid_rrf_merges_three_sources_and_dedups_paths(data_dir, monkeypatch)
     assert out[0]["via"] == ["fts", "vec"]
     assert out[0]["score"] == pytest.approx(1 / 62 + 1 / 61)
     by = {r["path"]: r for r in out}
-    assert by["site/quests/a/day-2.html"]["via"] == ["graph"]
-    assert by["site/quests/a/day-2.html"]["title"] == "양력 Day 2"
+    assert by["a/days/day-2.json"]["via"] == ["graph"]
+    assert by["a/days/day-2.json"]["title"] == "양력 Day 2"
     assert by["a/raw/x.md"]["text"] == "fts-x"
     assert len(retrieve.hybrid("양력", k=2)) == 2
 
