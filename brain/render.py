@@ -160,3 +160,21 @@ def render_quest(slug: str) -> Path:
         sources=sorted((s for s in ledger.sources if s.fetched), key=lambda s: (s.day, s.dot)),
         ledger=ledger, bridges=_bridges(list(dict.fromkeys(concept_ids)))), "utf-8")
     _copy_css(); render_shelf(); return out
+
+
+# --- brain graph page ---------------------------------------------------------
+
+BRAIN_PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#00a5a5", "#d2b000", "#f032e6",
+                 "#8b5a2b", "#2e8b57", "#1e90ff", "#ff7f50", "#7b68ee", "#c0392b", "#16a085", "#b8860b",
+                 "#e75480"]
+
+
+def render_brain_page() -> Path:
+    from . import frame
+    areas = [{"code": a["code"], "name_ko": a["name_ko"]} for a in frame.load()["areas"]]
+    palette = [BRAIN_PALETTE[i % len(BRAIN_PALETTE)] for i in range(len(areas))]
+    out = store.site_dir() / "brain" / "index.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(env.get_template("brain_graph.html.j2").render(
+        areas_json={"areas": areas, "palette": palette}), "utf-8")
+    _copy_css(); return out

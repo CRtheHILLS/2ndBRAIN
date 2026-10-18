@@ -4,10 +4,13 @@ Each stage loads/saves quest.json itself and routes every think call through
 ``quest.think_or_cached`` so it can park and resume.
 """
 import json
+import logging
 import re
 import time
 
 from . import catalog, graph, index, levels, models, prompts, quest, render, store, think
+
+log = logging.getLogger(__name__)
 
 _PARTICLES = re.compile(r"(에서|으로|을|를|이|가|은|는|의|에|로|와|과|도)$")
 _STOPWORDS = {"배우고", "싶어", "이해하고", "알고", "공부하자", "가르쳐", "줘", "나", "저", "완벽히", "확실히"}
@@ -299,6 +302,8 @@ def _stage_archive(slug: str) -> None:
     if render_quest is not None:
         render_quest(slug)
     render.render_shelf()
+    try: render.render_brain_page()
+    except Exception as e: log.warning("render_brain_page failed: %s", e)
     q = quest.load(slug)
     ledger = quest.load_ledger(slug)
     s = q["summary"]

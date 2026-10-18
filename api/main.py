@@ -499,6 +499,8 @@ async def lifespan(app: FastAPI):
     if get_settings().brain_token in ("", "change-me"):
         raise RuntimeError("BRAIN_TOKEN must be set")
     render.render_shelf()
+    try: render.render_brain_page()
+    except Exception: pass  # never block startup
     app.mount("/site", StaticFiles(directory=store.site_dir(), html=True), name="site")
     scheduler.start()
     try:
