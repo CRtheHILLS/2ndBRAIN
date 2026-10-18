@@ -52,8 +52,38 @@ def fetch_json(method, path, *, url, token, json_body=None, params=None, timeout
             detail = r.json().get("detail", r.text)
         except Exception:
             detail = r.text
-        raise RuntimeError(f"서버가 {r.status_code}로 답했어요: {detail}")
-    return r.json()
+        if isinstance(detail, list):
+            detail = "; ".join(str(d.get("msg", d)) if isinstance(d, dict) else str(d) for d in detail)
+        raise RuntimeError(f"서버 응답 {r.status_code}: {detail}")
+    try:
+        return r.json()
+    except ValueError:
+        raise RuntimeError("서버 답을 읽지 못했어요. 주소가 맞는지 확인해 주세요.")
+
+
+def _env_candidates():
+    return [Path.cwd() / ".env", Path(__file__).resolve().parent.parent / ".env"]
+
+
+def _read_dotenv():
+    """아주 작은 .env 읽기: KEY=VALUE 줄만, 주석·따옴표 무시."""
+    vals = {}
+    for f in _env_candidates():
+        try:
+            lines = f.read_text("utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip().removeprefix("export ").strip()
+            v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            vals.setdefault(k, v)
+    return vals
 
 
 class _Ctx:
@@ -72,22 +102,61 @@ def _full(ctx, path):
     return path if path.startswith("http") else ctx.url + path
 
 
-def _print_done(ctx, q):
+def _report_lines(ctx, q):
     s = q.get("summary") or {}
+    out = []
     index = (s.get("pages") or {}).get("index")
-    print("✔ 다 만들었어요!")
     if index:
-        print(f"지도: {_full(ctx, index)}")
-    print(f"자료 {s.get('n_sources', '?')}개 · 개념 {s.get('n_concepts', '?')}개 · "
-          f"예전 지식과 이어진 다리 {s.get('bridges', 0)}개")
+        out.append(f"지도: {_full(ctx, index)}")
+    if s.get("one_line_goal"):
+        out.append(f"목표 한 줄: {s['one_line_goal']}")
+    if s.get("day1_big_idea"):
+        out.append(f"Day 1 핵심: {s['day1_big_idea']}")
+    if q.get("status") == "done" or "bridges_top" in s:
+        out.append("예전 지식과 이어진 다리:")
+        top = s.get("bridges_top") or []
+        if top:
+            for b in top[:3]:
+                out.append(f"  - {b.get('a')} ↔ {b.get('b')} — {b.get('reason', '')}")
+        else:
+            out.append("  아직 없음")
+    if s.get("new_sources"):
+        out.append("새로 시도한 출처: " + ", ".join(map(str, s["new_sources"])))
+    if "n_sources" in s or "n_concepts" in s:
+        out.append(f"자료 {s.get('n_sources', '?')}개 · 개념 {s.get('n_concepts', '?')}개")
     if s.get("cost_estimate") is not None:
-        print(f"비용 추정: {s['cost_estimate']}")
+        out.append(f"비용 추정: {s['cost_estimate']}")
+    if s.get("elapsed_seconds") is not None:
+        sec = int(s["elapsed_seconds"])
+        out.append(f"걸린 시간: {sec // 60}분 {sec % 60}초" if sec >= 60 else f"걸린 시간: {sec}초")
+    return out
+
+
+def _print_done(ctx, q):
+    print("✔ 다 만들었어요!")
+    for line in _report_lines(ctx, q):
+        print(line)
+
+
+CONN_LOST = ("✖ 서버에 연결하지 못했어요. 퀘스트는 서버에서 계속 진행돼요. "
+             "잠시 뒤 `brain-learn watch {slug}`로 이어 보세요.")
 
 
 def _watch(ctx, slug, interval):
-    last = None
+    last, fails = None, 0
     while True:
-        q = ctx.call("GET", f"/quests/{slug}")
+        try:
+            q = ctx.call("GET", f"/quests/{slug}")
+            fails = 0
+        except httpx.HTTPError:
+            fails += 1
+            if fails == 1:
+                print("⏳ 서버 연결이 잠깐 끊겼어요. 다시 시도 중…", flush=True)
+            if fails >= 5:
+                print(CONN_LOST.format(slug=slug))
+                return 1
+            time.sleep(interval)
+            continue
         status, s = q.get("status"), q.get("summary") or {}
         stage = s.get("stage")
         if status == "done":
@@ -108,7 +177,13 @@ def _watch(ctx, slug, interval):
 
 
 def cmd_start(ctx, ns):
-    r = ctx.call("POST", "/quests", json_body={"sentence": ns.sentence, "days": ns.days, "level": ns.level})
+    body = {"sentence": ns.sentence, "level": ns.level}
+    if ns.days is not None:
+        body["days"] = ns.days
+    r = ctx.call("POST", "/quests", json_body=body)
+    if "slug" not in r:
+        print("✖ 서버 답에 퀘스트 이름이 없어요. 서버 버전을 확인해 주세요.", file=sys.stderr)
+        return 1
     note = " (이미 있던 퀘스트예요)" if r.get("existing") else ""
     print(f"퀘스트: {r['slug']}{note}")
     print(f"주소: {_full(ctx, r['url'])}")
@@ -119,12 +194,17 @@ def cmd_start(ctx, ns):
 
 def cmd_status(ctx, ns):
     q = ctx.call("GET", f"/quests/{ns.slug}")
+    if ns.json:
+        print(json.dumps(q, ensure_ascii=False, indent=2))
+        return 0
     s = q.get("summary") or {}
     print(f"{ns.slug}: {q.get('status')}" + (f" · {STAGE_KO.get(s.get('stage'), s.get('stage'))}" if s.get("stage") else ""))
     if q.get("error"):
         print(f"사유: {q['error']}")
     if q.get("open_tasks"):
         print(f"대기 중인 과제: {q['open_tasks']}개")
+    for line in _report_lines(ctx, q):
+        print(line)
     return 0
 
 
@@ -205,8 +285,8 @@ def cmd_ask(ctx, ns):
 
 def build_parser():
     p = argparse.ArgumentParser(prog="brain-learn", description="한 문장으로 배우기 — 학습 퀘스트 도구")
-    p.add_argument("--url", default=None, help="서버 주소 (기본: 환경변수 BRAIN_URL)")
-    p.add_argument("--token", default=None, help="접근 토큰 (기본: 환경변수 BRAIN_TOKEN)")
+    p.add_argument("--url", default=None, help="서버 주소 (명령 앞에 써요. 기본: BRAIN_URL 환경변수 또는 .env)")
+    p.add_argument("--token", default=None, help="접근 토큰 (명령 앞에 써요. 기본: BRAIN_TOKEN 환경변수 또는 .env)")
     sub = p.add_subparsers(dest="cmd", required=True, metavar="명령")
 
     s = sub.add_parser("start", help="새 퀘스트를 시작하고 끝날 때까지 지켜봐요", description="새 퀘스트를 시작해요.")
@@ -219,6 +299,7 @@ def build_parser():
 
     s = sub.add_parser("status", help="퀘스트 상태를 한 번 확인해요")
     s.add_argument("slug", help="퀘스트 이름(slug)")
+    s.add_argument("--json", action="store_true", help="퀘스트 원본 정보를 JSON으로 그대로 출력해요")
     s.set_defaults(fn=cmd_status)
 
     s = sub.add_parser("watch", help="끝날 때까지 진행 상황을 지켜봐요 (완료 0 · 실패 1 · 생각 담당 필요 3)")
@@ -268,16 +349,21 @@ def main(argv=None) -> int:
         ns = p.parse_args(argv)
     except SystemExit as e:
         return int(e.code or 0)
-    url = ns.url or os.environ.get("BRAIN_URL")
-    token = ns.token or os.environ.get("BRAIN_TOKEN")
+    dotenv = _read_dotenv()
+    url = ns.url or os.environ.get("BRAIN_URL") or dotenv.get("BRAIN_URL")
+    token = ns.token or os.environ.get("BRAIN_TOKEN") or dotenv.get("BRAIN_TOKEN")
     if not url or not token:
         print("서버 주소와 토큰이 필요해요. --url/--token 옵션을 쓰거나 "
               "환경변수 BRAIN_URL, BRAIN_TOKEN을 설정해 주세요.", file=sys.stderr)
         return 2
     try:
         return ns.fn(_Ctx(url, token), ns)
-    except (RuntimeError, httpx.HTTPError) as e:
+    except RuntimeError as e:
         print(f"✖ {e}", file=sys.stderr)
+        return 1
+    except (httpx.HTTPError, httpx.InvalidURL):
+        print("✖ 서버에 연결하지 못했어요. 주소와 인터넷 연결을 확인하고, 퀘스트가 있다면 "
+              "잠시 뒤 `brain-learn watch <slug>`로 이어 보세요.", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print("\n중단했어요. 퀘스트는 서버에서 계속 진행돼요.", file=sys.stderr)

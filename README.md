@@ -71,7 +71,7 @@ brain-learn ask "질문"                  # 내 지식 창고에서 먼저 찾�
 ```
 
 `--url`/`--token`을 생략하면 환경변수 `BRAIN_URL`, `BRAIN_TOKEN`을 써요. 설치 없이 쓰려면
-`.venv/Scripts/python -m sync.learn_cli ...`로 실행해요.
+`.venv/Scripts/python -m sync.learn_cli ...`로 실행해요. 프로젝트 루트에서는 `.env`의 `BRAIN_URL`, `BRAIN_TOKEN`을 자동으로 읽어서 따로 설정할 게 없어요. `--url`/`--token`은 명령 앞에 써요. 예: `brain-learn --url https://<app>.up.railway.app --token <토큰> list`
 
 결과 페이지는 `/site/quests/<slug>/index.html`(지도)와 그 아래 Day 1~7 페이지에 생겨요.
 

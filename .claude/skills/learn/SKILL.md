@@ -9,7 +9,7 @@ CR의 한 문장을 서버의 학습 퀘스트로 보내고, 끝날 때까지 �
 **되묻지 않아요.** 기본은 초등 눈높이 · 7일이고, 문장에 일수나 레벨이 있을 때만 `--days`, `--level`로 넣어요.
 
 CLI는 `.venv/Scripts/python -m sync.learn_cli`로 실행해요(아래에서는 `LEARN`이라고 줄여 써요).
-주소와 토큰은 `.env`의 `BRAIN_URL`, `BRAIN_TOKEN`을 써요.
+주소와 토큰은 CLI가 프로젝트 루트의 `.env`(`BRAIN_URL`, `BRAIN_TOKEN`)에서 직접 읽어요. 프로젝트 루트에서 바로 실행하면 되고 따로 설정할 게 없어요.
 
 ## 1. 시작
 ```
@@ -35,7 +35,7 @@ LEARN start "<CR의 문장 그대로>" [--days N] [--level 초등|일반|전문]
 모델이 쓸 수 있게 되면 퀘스트는 알아서 끝나요.
 
 ## 4. 완료(종료 코드 0) — 이렇게 보고해요
-`LEARN status <slug>`와 `GET /quests/<slug>`의 `summary`를 바탕으로 CR에게 한국어로, 쉬운 말로:
+보고 내용은 `LEARN watch`가 끝날 때 출력하는 내용(또는 `LEARN status <slug>`)에 다 들어 있어요. 직접 HTTP를 부르지 말고 그 출력을 CR에게 한국어로, 쉬운 말로 옮겨요. 더 필요하면 `LEARN status <slug> --json`:
 - 지도 링크 (전체 주소)
 - 목표 한 줄
 - Day 1 핵심 한 줄

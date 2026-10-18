@@ -112,3 +112,71 @@ def test_list_and_ask(monkeypatch, capsys):
     assert learn_cli.main(BASE + ["list"]) == 0
     assert learn_cli.main(BASE + ["ask", "질문"]) == 0
     assert "안녕 CR" in capsys.readouterr().out
+
+
+@pytest.fixture(autouse=True)
+def _no_dotenv(monkeypatch):
+    monkeypatch.setattr(learn_cli, "_env_candidates", lambda: [])
+
+
+def test_done_prints_full_report(monkeypatch, capsys):
+    done = {"status": "done", "summary": {
+        "pages": {"index": "/site/quests/heli/index.html", "days": []},
+        "one_line_goal": "헬기를 띄우는 원리 알기", "day1_big_idea": "날개가 돌며 공기를 눌러요",
+        "bridges_top": [{"a": "베르누이", "b": "양력", "reason": "공기 흐름"}],
+        "new_sources": ["youtube"], "n_sources": 3, "n_concepts": 4, "bridges": 1,
+        "cost_estimate": "$0.40", "elapsed_seconds": 125}}
+    monkeypatch.setattr(learn_cli, "fetch_json", _fake([], {("GET", "/quests/heli"): done}))
+    assert learn_cli.main(BASE + ["status", "heli"]) == 0
+    out = capsys.readouterr().out
+    for t in ["목표 한 줄: 헬기를 띄우는 원리 알기", "Day 1 핵심: 날개가", "베르누이 ↔ 양력 — 공기 흐름",
+              "새로 시도한 출처: youtube", "비용 추정: $0.40", "걸린 시간: 2분 5초"]:
+        assert t in out
+    done["summary"]["bridges_top"] = []
+    assert learn_cli.main(BASE + ["watch", "heli", "--interval", "0"]) == 0
+    assert "아직 없음" in capsys.readouterr().out
+    assert learn_cli.main(BASE + ["status", "heli", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "done"
+
+
+def test_watch_retries_connect_errors(monkeypatch, capsys):
+    import httpx
+    n = {"i": 0}
+
+    def fetch(method, path, **kw):
+        n["i"] += 1
+        if n["i"] <= 2:
+            raise httpx.ConnectError("x")
+        return {"status": "done", "summary": {}}
+    monkeypatch.setattr(learn_cli, "fetch_json", fetch)
+    assert learn_cli.main(BASE + ["watch", "heli", "--interval", "0"]) == 0
+    assert "서버 연결이 잠깐 끊겼어요" in capsys.readouterr().out
+
+
+def test_watch_gives_up_after_5(monkeypatch, capsys):
+    import httpx
+
+    def fetch(method, path, **kw):
+        raise httpx.ConnectError("x")
+    monkeypatch.setattr(learn_cli, "fetch_json", fetch)
+    assert learn_cli.main(BASE + ["watch", "heli", "--interval", "0"]) == 1
+    assert "서버에 연결하지 못했어요" in capsys.readouterr().out
+
+
+def test_dotenv_is_loaded(monkeypatch, tmp_path):
+    calls = []
+    (tmp_path / ".env").write_text('# c\nBRAIN_URL="http://dot"\nBRAIN_TOKEN=dtok\n', "utf-8")
+    monkeypatch.delenv("BRAIN_URL", raising=False)
+    monkeypatch.delenv("BRAIN_TOKEN", raising=False)
+    monkeypatch.setattr(learn_cli, "_env_candidates", lambda: [tmp_path / ".env"])
+    monkeypatch.setattr(learn_cli, "fetch_json", _fake(calls, {("GET", "/quests"): []}))
+    assert learn_cli.main(["list"]) == 0
+    assert calls[0][2] == "http://dot" and calls[0][3] == "dtok"
+
+
+def test_start_omits_days_when_none(monkeypatch):
+    calls = []
+    monkeypatch.setattr(learn_cli, "fetch_json", _fake(calls, {
+        ("POST", "/quests"): {"slug": "a", "status": "queued", "url": "/u"}}))
+    learn_cli.main(BASE + ["start", "x", "--no-watch"])
+    assert "days" not in calls[0][4]
