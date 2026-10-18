@@ -5,8 +5,9 @@ Each stage loads/saves quest.json itself and routes every think call through
 """
 import json
 import re
+import time
 
-from . import catalog, graph, index, levels, models, prompts, quest, store, think
+from . import catalog, graph, index, levels, models, prompts, quest, render, store, think
 
 _PARTICLES = re.compile(r"(에서|으로|을|를|이|가|은|는|의|에|로|와|과|도)$")
 _STOPWORDS = {"배우고", "싶어", "이해하고", "알고", "공부하자", "가르쳐", "줘", "나", "저", "완벽히", "확실히"}
@@ -144,9 +145,59 @@ def stage_bridge(slug: str) -> None:  # Task 15
     pass
 
 
-def stage_archive(slug: str) -> None:  # Task 13
-    pass
+def stage_archive(slug: str) -> None:
+    """Index, render, and fill the final summary (helpers below)."""
+    _stage_archive(slug)
 
 
 STAGE_FUNCS = {"plan": stage_plan, "collect": stage_collect, "classify": stage_classify,
                "teach": stage_teach, "bridge": stage_bridge, "archive": stage_archive}
+
+
+# --- archive helpers (Task 13) ------------------------------------------------
+
+COST_TABLE = {"anthropic": (3, 15), "gemini": (0, 0), "xai": (0.2, 0.5), "text": (0, 0)}  # USD / M tokens (in, out)
+
+
+def _estimate_cost(slug: str) -> float:
+    path = quest.quest_dir(slug) / "log.jsonl"
+    total = 0.0
+    if path.is_file():
+        for line in path.read_text("utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "provider" not in row:
+                continue
+            pin, pout = COST_TABLE.get(row["provider"], (0, 0))
+            total += (row.get("in") or 0) * pin / 1e6 + (row.get("out") or 0) * pout / 1e6
+    return round(total, 4)
+
+
+def _stage_archive(slug: str) -> None:
+    t0 = time.monotonic()
+    index.rebuild()
+    render_quest = getattr(render, "render_quest", None)  # added by the render task
+    if render_quest is not None:
+        render_quest(slug)
+    render.render_shelf()
+    q = quest.load(slug)
+    ledger = quest.load_ledger(slug)
+    s = q["summary"]
+    new_sources = list(ledger.new_connectors_tried) + [
+        str(r.get("name")) for r in ledger.special_tried if r.get("ok")]
+    s.update(
+        n_sources=sum(1 for x in ledger.sources if x.fetched),
+        n_concepts=len(graph.node_ids_in_book(slug, kind="concept")),
+        cost_estimate=_estimate_cost(slug),
+        new_sources=new_sources,
+        one_line_goal=(q.get("plan") or {}).get("one_line_goal", ""),
+        elapsed_seconds=round(q["budget"]["seconds"] + (time.monotonic() - t0), 3),
+        bridges=s.get("bridges", 0),
+        bridges_top=s.get("bridges_top", []),
+        day1_big_idea=s.get("day1_big_idea", ""),
+        pages=s.get("pages", {}),
+        stage="done",
+    )
+    quest.save(slug, q)

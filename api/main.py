@@ -8,7 +8,7 @@ from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depe
 from fastapi.responses import RedirectResponse, PlainTextResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from brain import store, ingest, distill, render, index, levels, catalog, think, graph
+from brain import store, ingest, distill, render, index, levels, catalog, think, graph, quest, scheduler
 from brain.config import get_settings
 from brain.ingest import _sanitize_filename
 from brain.slug import slugify
@@ -500,7 +500,11 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("BRAIN_TOKEN must be set")
     render.render_shelf()
     app.mount("/site", StaticFiles(directory=store.site_dir(), html=True), name="site")
-    yield
+    scheduler.start()
+    try:
+        yield
+    finally:
+        scheduler.stop()
 
 
 app = FastAPI(title="2nd BRAIN", lifespan=lifespan)
@@ -521,6 +525,101 @@ def require_token(x_brain_token: str = Header(default="")):
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+# --- learn quests -------------------------------------------------------------
+
+_QUEST_SLUG = re.compile(r"^[0-9a-z가-힣-]+$")
+
+
+class QuestCreate(BaseModel):
+    sentence: str
+    days: int | None = None
+    level: str | None = None
+
+
+class TaskOutput(BaseModel):
+    output: dict
+
+
+def _quest_or_404(slug: str) -> dict:
+    if not _QUEST_SLUG.match(slug):
+        raise HTTPException(400, "슬러그 형식이 올바르지 않아요")
+    try:
+        return quest.load(slug)
+    except (OSError, json.JSONDecodeError):
+        raise HTTPException(404, "그런 퀘스트가 없어요") from None
+
+
+@app.post("/quests", dependencies=[Depends(require_token)])
+def quest_create(body: QuestCreate):
+    if not body.sentence.strip():
+        raise HTTPException(400, "배우고 싶은 걸 한 문장으로 적어 주세요")
+    if body.level is not None and body.level not in levels.LEVELS:
+        raise HTTPException(400, f"눈높이는 {', '.join(levels.LEVELS)} 중 하나예요")
+    q = quest.create(body.sentence.strip(), days=body.days, level=body.level)
+    if not q["existing"]:
+        quest.start_background(q["slug"])
+    return {"slug": q["slug"], "status": q["status"], "existing": q["existing"],
+            "url": f"/site/quests/{q['slug']}/index.html"}
+
+
+@app.get("/quests", dependencies=[Depends(require_token)])
+def quest_list():
+    keys = ("slug", "sentence", "status", "created_at", "updated_at", "summary", "days_requested", "level")
+    return [{k: q.get(k) for k in keys} for q in quest.list_quests()]
+
+
+@app.get("/quests/{slug}", dependencies=[Depends(require_token)])
+def quest_get(slug: str):
+    q = _quest_or_404(slug)
+    return {**q, "open_tasks": len(quest.open_tasks(slug))}
+
+
+@app.get("/quests/{slug}/tasks", dependencies=[Depends(require_token)])
+def quest_tasks(slug: str):
+    _quest_or_404(slug)
+    return quest.open_tasks(slug)
+
+
+@app.post("/quests/{slug}/tasks/{task_id}", dependencies=[Depends(require_token)])
+def quest_submit_task(slug: str, task_id: str, body: TaskOutput):
+    _quest_or_404(slug)
+    try:
+        quest.submit_task(slug, task_id, body.output)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    except KeyError:
+        raise HTTPException(404, "그런 과제가 없어요") from None
+    quest.start_background(slug)
+    return {"accepted": True, "status": quest.load(slug)["status"]}
+
+
+@app.post("/quests/{slug}/resume", dependencies=[Depends(require_token)])
+def quest_resume(slug: str):
+    _quest_or_404(slug)
+    return quest.resume(slug)
+
+
+@app.post("/quests/{slug}/rerender", dependencies=[Depends(require_token)])
+def quest_rerender(slug: str, level: str):
+    _quest_or_404(slug)
+    if level not in levels.LEVELS:
+        raise HTTPException(400, f"눈높이는 {', '.join(levels.LEVELS)} 중 하나예요")
+    if quest.is_running(slug):
+        raise HTTPException(409, "지금 실행 중이에요. 끝난 뒤에 다시 시도해 주세요")
+    levels.set_level(f"quest:{slug}", level)
+    d = quest.quest_dir(slug)
+    for pat, sub in (("teach-*.json", "tasks"), ("*.json", "days")):
+        for f in (d / sub).glob(pat):
+            f.unlink(missing_ok=True)
+    q = quest.load(slug)
+    q["level"] = level
+    q["stage_done"] = [s for s in q["stage_done"] if s not in ("teach", "bridge", "archive")]
+    q["status"] = "queued"
+    quest.save(slug, q)
+    quest.start_background(slug)
+    return {"slug": slug, "status": "queued", "level": level}
 
 
 @app.get("/robots.txt")
