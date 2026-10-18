@@ -10,6 +10,7 @@ import datetime as dt
 import json
 import os
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -285,13 +286,14 @@ def __getattr__(name: str):
 
 
 def _summarize(slug: str) -> dict:
-    return {
-        "pages": {},
-        "n_sources": sum(1 for s in load_ledger(slug).sources if s.fetched),
-        "n_concepts": len(graph.node_ids_in_book(slug, kind="concept")),
-        "bridges": 0,
-        "cost_estimate": 0.0,
-    }
+    """Final summary; keeps what the archive/teach/bridge stages already wrote (the CLI prints it)."""
+    s = dict(load(slug).get("summary") or {})
+    s.update(n_sources=sum(1 for x in load_ledger(slug).sources if x.fetched),
+             n_concepts=len(graph.node_ids_in_book(slug, kind="concept")))
+    s.setdefault("pages", {})
+    s.setdefault("bridges", 0)
+    s.setdefault("cost_estimate", 0.0)
+    return s
 
 
 def _finish(slug: str, status: str, error: str | None = None, summary: dict | None = None) -> dict:
@@ -344,3 +346,53 @@ def run(slug: str) -> dict:
         log(slug, event="failed", error=err)
         return _finish(slug, "failed", error=err)
     return _finish(slug, "done", summary={**_summarize(slug), "stage": "done"})
+
+
+# ---------------------------------------------------------------------------
+# background execution + resume
+# ---------------------------------------------------------------------------
+
+_running: set[str] = set()
+_lock = threading.Lock()
+
+
+def _worker(slug: str) -> None:
+    try:
+        run(slug)
+    finally:
+        with _lock:
+            _running.discard(slug)
+
+
+def start_background(slug: str) -> bool:
+    """Run the quest in a daemon thread; False when it is already running."""
+    with _lock:
+        if slug in _running:
+            return False
+        _running.add(slug)
+    try:
+        threading.Thread(target=_worker, args=(slug,), name=f"quest-{slug}", daemon=True).start()
+    except Exception:
+        with _lock:
+            _running.discard(slug)
+        raise
+    return True
+
+
+def is_running(slug: str) -> bool:
+    with _lock:
+        return slug in _running
+
+
+def resume(slug: str) -> dict:
+    q = load(slug)
+    status = q.get("status")
+    started = False
+    if status in ("waiting_thinker", "failed", "queued") or (status == "running" and not is_running(slug)):
+        # budget.seconds is cumulative, so a quest that failed on the time budget would
+        # fail again at once; give it a fresh clock.  Other failures keep their spent time.
+        if status == "failed" and str(q.get("error") or "").startswith("실행 시간 예산 초과"):
+            q["budget"]["seconds"] = 0.0
+            save(slug, q)
+        started = start_background(slug)
+    return {"slug": slug, "status": load(slug).get("status"), "started": started}
