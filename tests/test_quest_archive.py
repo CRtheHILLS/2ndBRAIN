@@ -7,6 +7,7 @@ from brain import models, quest, quest_stages, render
 
 def test_stage_archive_fills_summary_and_cost(data_dir, monkeypatch):
     monkeypatch.setattr(render, "render_shelf", lambda: None)
+    monkeypatch.setattr(render, "render_quest", lambda slug: None, raising=False)
     slug = quest.create("헬리콥터")["slug"]
     q = quest.load(slug)
     q["plan"] = {"one_line_goal": "헬리콥터가 어떻게 뜨는지 안다"}
