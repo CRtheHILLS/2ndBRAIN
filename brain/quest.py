@@ -142,7 +142,9 @@ def log(slug: str, **fields) -> None:
 def save_ledger(slug: str, ledger: models.SourceLedger) -> None:
     d = quest_dir(slug)
     d.mkdir(parents=True, exist_ok=True)
-    (d / "sources.json").write_text(ledger.model_dump_json(indent=2), "utf-8")
+    tmp = d / "sources.json.tmp"
+    tmp.write_text(ledger.model_dump_json(indent=2), "utf-8")
+    os.replace(tmp, d / "sources.json")
 
 
 def load_ledger(slug: str) -> models.SourceLedger:
@@ -212,6 +214,20 @@ def task_result(slug: str, task_id: str) -> dict | None:
 
 SUPERSEDING_PREFIXES = ("classify-",)  # stages that re-batch on resume
 
+_task_locks: dict[str, threading.Lock] = {}
+_task_locks_guard = threading.Lock()
+
+
+def _task_lock(slug: str) -> threading.Lock:
+    """One lock per quest: task-file read-check-write is atomic between the runner and submit_task."""
+    with _task_locks_guard:
+        return _task_locks.setdefault(slug, threading.Lock())
+
+
+def _done_result(slug: str, task_id: str) -> dict | None:
+    t = _read_task(slug, task_id)
+    return t["result"] if t and t.get("status") == "done" else None
+
 
 def _park(slug: str, task: dict, reason: str):
     tid = task["task_id"]
@@ -237,13 +253,26 @@ def think_or_cached(slug: str, task_id: str, kind: str, system: str, user: str,
     task = task or {"task_id": task_id, "created_at": _now()}
     task.update(kind=kind, schema=schema.__name__, system=system, user=user, context=context)
     if load(slug)["budget"]["think_calls"] >= get_settings().quest_max_think_calls:
-        _park(slug, task, "생각 호출 예산 초과")
+        with _task_lock(slug):
+            done = _done_result(slug, task_id)
+            if done is not None:
+                return done
+            _park(slug, task, "생각 호출 예산 초과")
     try:
         r = think.think(kind, system, user, schema, log_path=quest_dir(slug) / "log.jsonl")
     except think.ThinkUnavailable as e:
-        _park(slug, task, "; ".join(e.reasons) or "쓸 수 있는 생각 엔진 없음")
-    task.update(status="done", result=r.data, provider=r.provider, model=r.model, error=None)
-    _write_task(slug, task)
+        with _task_lock(slug):
+            done = _done_result(slug, task_id)  # submitted while we were thinking: keep it
+            if done is not None:
+                log(slug, event="task_already_done", task=task_id)
+                return done
+            _park(slug, task, "; ".join(e.reasons) or "쓸 수 있는 생각 엔진 없음")
+    with _task_lock(slug):
+        done = _done_result(slug, task_id)
+        if done is not None:  # a submitted answer wins over a late model answer
+            return done
+        task.update(status="done", result=r.data, provider=r.provider, model=r.model, error=None)
+        _write_task(slug, task)
     q = load(slug)
     q["budget"]["think_calls"] += 1
     save(slug, q)
@@ -251,6 +280,11 @@ def think_or_cached(slug: str, task_id: str, kind: str, system: str, user: str,
 
 
 def submit_task(slug: str, task_id: str, output: dict) -> dict:
+    with _task_lock(slug):
+        return _submit_locked(slug, task_id, output)
+
+
+def _submit_locked(slug: str, task_id: str, output: dict) -> dict:
     task = _read_task(slug, task_id)
     if task is None:
         raise KeyError(f"과제를 찾을 수 없음: {task_id}")
@@ -356,12 +390,31 @@ _running: set[str] = set()
 _lock = threading.Lock()
 
 
+def _resume_flag(slug: str) -> Path:
+    return quest_dir(slug) / "resume_requested"
+
+
 def _worker(slug: str) -> None:
+    """Run the quest; if a task was submitted while it ran (``resume_requested``), run once more."""
     try:
         run(slug)
     finally:
+        again = False
         with _lock:
-            _running.discard(slug)
+            flag = _resume_flag(slug)
+            if flag.exists():
+                flag.unlink(missing_ok=True)
+                again = True
+            else:
+                _running.discard(slug)
+        if again:
+            try:
+                if load(slug).get("status") == "waiting_thinker":
+                    log(slug, event="resume_requested")
+                    run(slug)
+            finally:
+                with _lock:
+                    _running.discard(slug)
 
 
 def start_background(slug: str) -> bool:
@@ -377,6 +430,15 @@ def start_background(slug: str) -> bool:
             _running.discard(slug)
         raise
     return True
+
+
+def start_or_request_resume(slug: str) -> bool:
+    """Start the quest now, or -- while its thread still runs -- ask that thread to run once more."""
+    with _lock:
+        if slug in _running:
+            _resume_flag(slug).write_text("1", "utf-8")
+            return False
+    return start_background(slug)
 
 
 def is_running(slug: str) -> bool:

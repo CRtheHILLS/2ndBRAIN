@@ -5,6 +5,7 @@ Each stage loads/saves quest.json itself and routes every think call through
 """
 import json
 import logging
+import os
 import re
 import time
 
@@ -234,7 +235,9 @@ def stage_teach(slug: str) -> None:
             _link_lesson(slug, plan["title_ko"], lesson)
             p = quest.quest_dir(slug) / "days" / f"day-{n}.json"
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps(lesson, ensure_ascii=False, indent=2), "utf-8")
+            tmp = p.with_suffix(".json.tmp")  # atomic: readers never see a half-written lesson
+            tmp.write_text(json.dumps(lesson, ensure_ascii=False, indent=2), "utf-8")
+            os.replace(tmp, p)
             render.render_quest_day(slug, n)
             quest.log(slug, event="teach_day", day=n, dots=len(lesson["dots"]))
         elif not (store.site_dir() / "quests" / slug / f"day-{n}.html").exists():

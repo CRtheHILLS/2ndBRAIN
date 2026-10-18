@@ -597,8 +597,9 @@ def quest_submit_task(slug: str, task_id: str, body: TaskOutput):
         raise HTTPException(400, str(e)) from None
     except KeyError:
         raise HTTPException(404, "그런 과제가 없어요") from None
-    quest.start_background(slug)
-    return {"accepted": True, "status": quest.load(slug)["status"]}
+    # still running (e.g. about to park on this very task)? the worker runs once more when it ends
+    started = quest.start_or_request_resume(slug)
+    return {"accepted": True, "status": quest.load(slug)["status"], "resume_requested": not started}
 
 
 @app.post("/quests/{slug}/resume", dependencies=[Depends(require_token)])

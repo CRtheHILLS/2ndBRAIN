@@ -335,3 +335,45 @@ def test_bridge_stage_parks_and_submitted_batch_resumes(fakes, monkeypatch):
     assert quest.run(slug)["status"] == "done"
     assert quest.load(slug)["summary"]["bridges"] == 1
     assert len(graph.neighbors("gyroscope", rels=["bridge"])["edges"]) == 1
+
+
+def test_submit_during_think_is_not_lost_to_park(fakes, monkeypatch):
+    slug = quest.create("헬리콥터", days=2)["slug"]
+    fakes.unavailable = True
+    assert quest.run(slug)["summary"]["waiting_task"] == "plan"  # plan task is open
+    fakes.unavailable = False
+    real = think.think
+
+    def submit_then_fail(kind, system, user, schema=None, **kw):
+        if kind == "plan":  # CR's session answers while the API attempt is still in flight
+            quest.submit_task(slug, "plan", _plan_dict())
+            raise think.ThinkUnavailable(["anthropic: overloaded"])
+        return real(kind, system, user, schema, **kw)
+    monkeypatch.setattr(think, "think", submit_then_fail)
+    out = quest.run(slug)
+    t = quest._read_task(slug, "plan")
+    assert t["status"] == "done" and t["provider"] == "submitted"
+    assert out["status"] == "done" and "plan" in out["stage_done"]
+
+
+def test_submit_while_running_requests_one_more_run(data_dir, monkeypatch):
+    import threading
+    slug = quest.create("헬리콥터", days=2)["slug"]
+    gate, runs = threading.Event(), []
+
+    def fake_run(s):
+        runs.append(s)
+        if len(runs) == 1:
+            gate.wait(5)
+            q = quest.load(s)
+            q["status"] = "waiting_thinker"
+            quest.save(s, q)
+    monkeypatch.setattr(quest, "run", fake_run)
+    assert quest.start_background(slug) is True
+    assert quest.start_or_request_resume(slug) is False  # flagged instead
+    gate.set()
+    for t in threading.enumerate():
+        if t.name == f"quest-{slug}":
+            t.join(timeout=5)
+    assert runs == [slug, slug] and not quest.is_running(slug)
+    assert not (quest.quest_dir(slug) / "resume_requested").exists()
