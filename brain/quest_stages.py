@@ -259,7 +259,11 @@ def stage_teach(slug: str) -> None:
 
 
 def stage_bridge(slug: str) -> None:
-    """Link this quest's concepts to concepts learned in other books/quests (honest links only)."""
+    """Link this quest's concepts to concepts learned in other books/quests (honest links only).
+
+    ``summary.bridges`` counts all visible cross-book links for this quest's concepts, not only
+    the ones made in this run.
+    """
     from . import bridge, render
     days = [d["n"] for d in quest.load(slug)["plan"]["days"]]
     lessons = {n: render.load_day(slug, n) for n in days}

@@ -290,14 +290,17 @@ def rebridge(node_ids: list[str], *, complete=None, task_id: str | None = None,
         return []
     allowed = {(s, c["id"]) for s, c in pairs}
     made: list[dict] = []
-    done: set[tuple] = set()
+    done: set[frozenset] = set()
     for v in batch.verdicts:
-        key = (v.src, v.dst)
+        key = frozenset((v.src, v.dst))  # one pair -> at most one edge, whatever the direction
         if not v.connects or v.rel not in BRIDGE_RELS or v.src == v.dst or key in done:
             continue
-        if key not in allowed and key[::-1] not in allowed:
+        if (v.src, v.dst) not in allowed and (v.dst, v.src) not in allowed:
             continue
         reason = v.reason.strip()
+        if not reason:  # a link nobody can explain is not stored (honesty)
+            log.info("이유 없는 다리 판정은 버림: %s ↔ %s", v.src, v.dst)
+            continue
         graph.add_edge(v.src, v.dst, v.rel, weight=1.0, reason=reason, evidence="bridge")
         done.add(key)
         made.append({"src": v.src, "dst": v.dst, "rel": v.rel, "reason": reason})
@@ -311,7 +314,8 @@ def rebridge(node_ids: list[str], *, complete=None, task_id: str | None = None,
 
 def bridges_for(node_ids: list[str]) -> list[dict]:
     """Shown links (bridge/requires/is_a) from these nodes to concepts of another book/quest."""
-    out: dict[tuple, dict] = {}
+    prio = {r: i for i, r in enumerate(SHOWN_RELS)}
+    out: dict[frozenset, dict] = {}  # one entry per pair, the highest-priority rel wins
     with closing(db.connect()) as con:
         ids = {graph._resolve(con, n) for n in node_ids}
         books: dict[str, set[str]] = {}
@@ -331,8 +335,8 @@ def bridges_for(node_ids: list[str]) -> list[dict]:
                 other = d if s == me else s
                 if other == me:
                     continue
-                key = (frozenset((me, other)), rel)
-                if key in out:
+                key = frozenset((me, other))
+                if key in out and prio[out[key]["rel"]] <= prio[rel]:
                     continue
                 theirs = books_cached(other) - books_cached(me)
                 if not theirs:
@@ -341,7 +345,6 @@ def bridges_for(node_ids: list[str]) -> list[dict]:
                             "src_label": _label(graph._node(con, me), me),
                             "dst_label": _label(graph._node(con, other), other),
                             "dst_books": [_book_title(b) for b in sorted(theirs)]}
-    prio = {r: i for i, r in enumerate(SHOWN_RELS)}
     return sorted(out.values(), key=lambda b: (prio[b["rel"]], b["src_label"], b["dst_label"]))
 
 

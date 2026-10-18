@@ -270,10 +270,15 @@ def test_stage_names_reexported_from_quest():
     assert quest.STAGE_FUNCS is quest_stages.STAGE_FUNCS
     assert quest.stage_plan is quest_stages.stage_plan
 
-def test_full_run_creates_bridge_to_prior_book(fakes, monkeypatch):
+BRIDGE_REASON = "자이로스코프가 쓰러지지 않는 건 각운동량이 지켜지기 때문이에요."
+BRIDGE_VERDICTS = {"verdicts": [{"src": "gyroscope", "dst": "angular-momentum", "connects": True,
+                                 "rel": "bridge", "reason": BRIDGE_REASON}]}
+
+
+def _bridge_world(fakes, monkeypatch, bridge_unavailable=False):
+    """Prior book 양자역학 (각운동량) + a 1-day helicopter quest whose dot is 자이로스코프."""
     graph.ingest_card({"id": "aa" * 32, "book": "양자역학", "title": "각운동량 입문", "field_code": "B2",
                        "concept_pairs": [{"ko": "각운동량", "en": "Angular momentum"}]})
-    reason = "자이로스코프가 쓰러지지 않는 건 각운동량이 지켜지기 때문이에요."
     plan = {"kind": "topic", "title_ko": "헬리콥터", "title_en": "Helicopter",
             "one_line_goal": "헬리콥터가 어떻게 뜨는지 안다",
             "days": [{"n": 1, "big_idea": "도는 것은 버틴다",
@@ -291,14 +296,19 @@ def test_full_run_creates_bridge_to_prior_book(fakes, monkeypatch):
         fakes.calls.append(kind)
         if kind == "bridge":
             bridge_users.append(user)
-            data = {"verdicts": [{"src": "gyroscope", "dst": "angular-momentum", "connects": True,
-                                  "rel": "bridge", "reason": reason}]}
+            if bridge_unavailable:
+                raise think.ThinkUnavailable(["anthropic: no key"])
+            data = BRIDGE_VERDICTS
         else:
             data = {"plan": plan, "classify": batch, "teach": lesson}[kind]
         return think.ThinkResult(data, "fake", "fake-1", 10, 20, 0.01)
     monkeypatch.setattr(think, "think", fake)
+    return quest.create("헬리콥터 배우고 싶어", days=1)["slug"], bridge_users
 
-    slug = quest.create("헬리콥터 배우고 싶어", days=1)["slug"]
+
+def test_full_run_creates_bridge_to_prior_book(fakes, monkeypatch):
+    slug, bridge_users = _bridge_world(fakes, monkeypatch)
+    reason = BRIDGE_REASON
     assert quest.run(slug)["status"] == "done"
     assert fakes.calls.count("bridge") == 1 and "각운동량" in bridge_users[0]
     edges = graph.neighbors("gyroscope", rels=["bridge"])["edges"]
@@ -310,3 +320,18 @@ def test_full_run_creates_bridge_to_prior_book(fakes, monkeypatch):
     assert "각운동량" in day and reason in day and "양자역학에서 배움" in day
     index = (store.site_dir() / "quests" / slug / "index.html").read_text("utf-8")
     assert "각운동량" in index
+
+
+def test_bridge_stage_parks_and_submitted_batch_resumes(fakes, monkeypatch):
+    slug, _ = _bridge_world(fakes, monkeypatch, bridge_unavailable=True)
+    out = quest.run(slug)
+    assert out["status"] == "waiting_thinker"
+    assert out["summary"]["waiting_task"] == "bridge"
+    assert "bridge" not in out["stage_done"]
+    task = quest.open_tasks(slug)[0]
+    assert (task["task_id"], task["kind"], task["schema"]) == ("bridge", "bridge", "BridgeBatch")
+    assert graph.neighbors("gyroscope", rels=["bridge"])["edges"] == []
+    assert quest.submit_task(slug, "bridge", BRIDGE_VERDICTS)["accepted"] is True
+    assert quest.run(slug)["status"] == "done"
+    assert quest.load(slug)["summary"]["bridges"] == 1
+    assert len(graph.neighbors("gyroscope", rels=["bridge"])["edges"]) == 1

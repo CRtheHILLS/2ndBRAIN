@@ -128,6 +128,31 @@ def test_rebridge_outside_quest_swallows_think_unavailable(data_dir, monkeypatch
         bridge.rebridge(["gyroscope"], strict=True)
 
 
+def test_rebridge_skips_reasonless_and_opposite_duplicates(data_dir):
+    _world()
+    answer = {"verdicts": [
+        {"src": "gyroscope", "dst": "spin", "connects": True, "rel": "bridge", "reason": "   "},
+        {"src": "gyroscope", "dst": "angular-momentum", "connects": True, "rel": "bridge",
+         "reason": REASON},
+        {"src": "angular-momentum", "dst": "gyroscope", "connects": True, "rel": "requires",
+         "reason": "각운동량을 알아야 자이로스코프를 이해해요."},
+    ]}
+    made = bridge.rebridge(["gyroscope"], complete=_fake_complete(answer))
+    assert made == [{"src": "gyroscope", "dst": "angular-momentum", "rel": "bridge", "reason": REASON}]
+    edges = graph.neighbors("gyroscope", rels=["bridge", "requires"])["edges"]
+    assert [(e["src"], e["dst"], e["rel"]) for e in edges] == [("gyroscope", "angular-momentum", "bridge")]
+
+
+def test_bridges_for_keeps_highest_priority_rel_per_pair(data_dir):
+    _world()
+    graph.add_edge("angular-momentum", "gyroscope", "requires", reason="선행")
+    graph.add_edge("gyroscope", "angular-momentum", "bridge", reason=REASON)
+    graph.add_edge("gyroscope", "spin", "is_a", reason="하위")
+    graph.add_edge("spin", "gyroscope", "requires", reason="선행")
+    out = bridge.bridges_for(["gyroscope"])
+    assert [(b["dst"], b["rel"]) for b in out] == [("angular-momentum", "bridge"), ("spin", "requires")]
+
+
 def test_bridges_for_labels_and_books(data_dir):
     _world()
     quest.save("quest-heli", {"slug": "quest-heli", "plan": {"title_ko": "헬리콥터 퀘스트"}})

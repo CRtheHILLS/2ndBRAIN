@@ -766,8 +766,13 @@ REBRIDGE_CHUNK = 5  # nodes per think call (5 x 8 candidates = the 40-pair batch
 
 @app.post("/graph/rebridge", dependencies=[Depends(require_token)])
 def graph_rebridge(field: str | None = None, limit: int = 50):
+    """Re-run bridges for concepts in ``field`` (or the ``limit`` most recently updated ones).
+
+    Targets are judged in chunks of REBRIDGE_CHUNK nodes, one think call per chunk (at most
+    40 pairs each); ``limit`` is clamped to 100, so one request makes at most 20 think calls.
+    """
     from brain import bridge
-    limit = max(1, min(limit, 500))
+    limit = max(1, min(limit, 100))
     if field:
         targets = [n["id"] for n in graph.by_field(field, 10**6) if n["kind"] == "concept"][:limit]
     else:

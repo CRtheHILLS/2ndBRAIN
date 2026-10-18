@@ -420,6 +420,11 @@ def test_rebridge_route_requires_token_and_returns_counts(data_dir, monkeypatch)
         r = c.post("/graph/rebridge?field=B2", headers=tok)
         assert r.status_code == 200 and r.json() == {"targets": 1, "bridges": 1}
         assert seen[-1] == ["gyroscope"]  # concepts only
+        limits = []
+        real_recent = bridge.recent_concepts
+        monkeypatch.setattr(bridge, "recent_concepts", lambda n: limits.append(n) or real_recent(n))
+        c.post("/graph/rebridge?limit=1000", headers=tok)
+        assert limits == [100]  # clamp: at most 20 think calls per request
         r = c.post("/graph/rebridge?limit=50", headers=tok)
         assert r.json() == {"targets": 2, "bridges": 1}
 
