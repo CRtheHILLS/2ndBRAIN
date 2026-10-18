@@ -22,6 +22,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from . import frame, models, prompts, store, think
+from . import graph as knowledge_graph
 from .config import get_settings
 from .think import parse_json
 
@@ -286,8 +287,11 @@ def learn_one(entry: dict, llm_complete=None) -> dict | None:
 
 
 def _after_learn(entries: list[dict]) -> list[str]:
-    """Hook for the graph upsert; returns names of newly created concepts."""
-    return []
+    """Put freshly learned entries into the graph; returns new concept ids."""
+    out: list[str] = []
+    for e in entries:
+        out.extend(c for c in knowledge_graph.ingest_card(e) if c not in out)
+    return out
 
 
 def learn_pending(limit: int = 10, llm_complete=None, book: str | None = None,
@@ -297,16 +301,20 @@ def learn_pending(limit: int = 10, llm_complete=None, book: str | None = None,
 
     items = todo()[:max(0, limit)]
     size = max(1, batch_size)
-    done: list[dict] = []
-    bad = 0
+    learned = bad = 0
+    new_concepts: list[str] = []
     for i in range(0, len(items), size):
+        batch_done = []
         for r in learn_batch(items[i:i + size], complete=llm_complete):
             if r is None:
                 bad += 1
             else:
-                done.append(r)
-    return {"learned": len(done), "failed": bad, "remaining": len(todo()),
-            "new_concepts": _after_learn(done)}
+                batch_done.append(r)
+        # graph upsert right after each batch so a later ThinkUnavailable loses nothing
+        learned += len(batch_done)
+        new_concepts += [c for c in _after_learn(batch_done) if c not in new_concepts]
+    return {"learned": learned, "failed": bad, "remaining": len(todo()),
+            "new_concepts": new_concepts}
 
 
 # ---------------------------------------------------------------------------

@@ -1,17 +1,9 @@
-import sqlite3
 from contextlib import closing
-from . import store
+from . import db, store
 from .config import get_settings
 
-def _db():
-    con = sqlite3.connect(get_settings().data_dir / "brain.db")
-    con.executescript("""
-    CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(slug, path, body, tokenize='trigram');
-    CREATE TABLE IF NOT EXISTS vec_meta(path TEXT PRIMARY KEY, model TEXT);""")
-    return con
-
 def rebuild() -> int:
-    with closing(_db()) as con, con:
+    with closing(db.connect()) as con, con:
         con.execute("DELETE FROM docs")
         n = 0
         root = get_settings().data_dir / "books"
@@ -23,7 +15,7 @@ def rebuild() -> int:
 
 def search(q: str, k: int = 10) -> list[dict]:
     long_terms = [t for t in q.split() if len(t) >= 3]
-    with closing(_db()) as con:
+    with closing(db.connect()) as con:
         if long_terms:
             match_q = " AND ".join('"' + t.replace('"', '""') + '"' for t in long_terms)
             rows = con.execute("SELECT slug, path, snippet(docs, 2, '<mark>', '</mark>', '…', 12), bm25(docs) "
