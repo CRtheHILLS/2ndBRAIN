@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     quest_max_pdf_pages: int = 40
     quest_max_minutes: int = 30
     quest_quota_per_dot: int = 2
+    canon_wikidata: bool = True
 
 
 @lru_cache

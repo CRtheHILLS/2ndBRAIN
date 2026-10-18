@@ -13,7 +13,6 @@ from typing import Iterable
 
 from . import db, frame
 from .config import get_settings
-from .slug import slugify
 
 RELS = ("is_a", "part_of", "requires", "related", "bridge", "contradicts", "cites",
         "about", "in_book", "taught_in", "asked")
@@ -307,11 +306,6 @@ def rebuild() -> int:
 # catalog link
 # ---------------------------------------------------------------------------
 
-def _concept_id_fallback(label_ko: str, label_en: str = "") -> str:
-    """Temporary concept id until canon.canon exists (Task 6)."""
-    return slugify(label_en) or slugify(label_ko)
-
-
 def ingest_card(entry: dict) -> list[str]:
     """Add one learned catalog entry to the graph; returns newly created concept ids."""
     code = frame.resolve_code(entry.get("field_code") or "")
@@ -325,16 +319,19 @@ def ingest_card(entry: dict) -> list[str]:
         upsert_node(f"book:{book}", "book", book)
         add_edge(src, f"book:{book}", "in_book")
     pairs = entry.get("concept_pairs") or [{"ko": c, "en": ""} for c in entry.get("concepts") or []]
+    from . import canon  # lazy: canon imports graph
+    known = {n["id"] for n in by_kind("concept", limit=10**6)}
     ids: list[str] = []
     new: list[str] = []
     for p in pairs:
-        cid = _concept_id_fallback(p.get("ko", ""), p.get("en", ""))
-        cid = resolve(cid) if cid else cid
-        if not cid or cid in ids:
+        if not (p.get("ko") or p.get("en")):
             continue
-        if get_node(cid) is None:
+        cid = canon.canon(p.get("ko", ""), p.get("en", ""), code)
+        if cid in ids:
+            continue
+        if cid not in known:
+            known.add(cid)
             new.append(cid)
-        upsert_node(cid, "concept", p.get("ko", ""), p.get("en", ""), field_code=code)
         add_edge(src, cid, "about")
         ids.append(cid)
     for i, a in enumerate(ids):
