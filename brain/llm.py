@@ -23,7 +23,5 @@ def ocr_image(image_bytes: bytes, mime: str) -> str:
     return _first_text(r)
 
 def complete(system: str, user: str, smart: bool = False) -> str:
-    s = get_settings()
-    r = _client().messages.create(model=s.model_smart if smart else s.model_fast, max_tokens=8000,
-        system=system, messages=[{"role": "user", "content": user}])
-    return _first_text(r)
+    from .think import complete_text  # lazy: think imports this module
+    return complete_text(system, user, smart)[0]
