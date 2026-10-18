@@ -18,6 +18,9 @@ def search_entity(label: str, lang: str) -> dict | None:
             "action": "wbsearchentities", "search": label, "language": lang, "uselang": lang,
             "type": "item", "limit": 5, "format": "json"}, timeout=10).json()
         for it in data.get("search", []):
+            desc = (it.get("description") or "").lower()
+            if "disambiguation" in desc or "동음이의" in desc:
+                continue
             aliases = list(it.get("aliases") or [])
             if _norm(it.get("label") or "") == want or want in {_norm(a) for a in aliases}:
                 return {"id": it["id"], "label": it.get("label", ""),

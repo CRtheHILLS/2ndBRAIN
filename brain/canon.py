@@ -23,7 +23,8 @@ def split_bilingual(label: str) -> tuple[str, str]:
     """'양자 얽힘 (Quantum Entanglement)' -> ('양자 얽힘', 'Quantum Entanglement')."""
     label = unicodedata.normalize("NFC", label or "").strip()
     m = _BRACKETS.match(label)
-    if m and m.group(1).strip() and _ascii_dominant(m.group(2)):
+    if (m and re.search(r"[가-힣]", m.group(1)) and _ascii_dominant(m.group(2))
+            and len(re.findall(r"[A-Za-z]", m.group(2))) >= 2):
         return m.group(1).strip(), m.group(2).strip()
     return label, ""
 
@@ -47,6 +48,14 @@ def _existing(label_ko: str, label_en: str) -> dict | None:
             if n["kind"] == "concept" and norm(lab) in (norm(n["label_ko"]), norm(n["label_en"])):
                 return n
     return None
+
+
+def _usable(node: dict | None, qid: str, area: str) -> bool:
+    """A candidate id is usable when free, or when the node there is compatible (same concept)."""
+    if node is None:
+        return True
+    a = _area(node["field_code"])
+    return not (qid and node["wikidata"] and qid != node["wikidata"]) and not (a and area and a != area)
 
 
 def _lookup(label_ko: str, label_en: str, lookup) -> dict | None:
@@ -82,11 +91,15 @@ def canon(label_ko: str, label_en: str = "", field_code: str = "", *, lookup=Non
     hit = None
     if found:
         node_area = _area(found["field_code"])
-        if not (area and node_area and area != node_area):
-            return _learn(found["id"], label_ko, label_en)
-        # same spelling in a different field: only differing Wikidata ids prove a homonym
         hit = _lookup(label_ko, label_en, lookup)
-        if not (hit and found["wikidata"] and hit["id"] != found["wikidata"]):
+        qid = hit["id"] if hit else ""
+        homonym = bool(area and node_area and area != node_area) or \
+            bool(qid and found["wikidata"] and qid != found["wikidata"])
+        # a different top-level area is a different concept unless both QIDs are known and equal
+        if not homonym or (qid and qid == found["wikidata"]):
+            if qid and not found["wikidata"] and not graph.find_alias(f"wd:{qid}"):
+                graph.upsert_node(found["id"], "concept", found["label_ko"], found["label_en"],
+                                  wikidata=qid)
             return _learn(found["id"], label_ko, label_en)
     else:
         hit = _lookup(label_ko, label_en, lookup)
@@ -104,7 +117,15 @@ def canon(label_ko: str, label_en: str = "", field_code: str = "", *, lookup=Non
         qid_clash = bool(qid and ex["wikidata"] and qid != ex["wikidata"])
         a = _area(ex["field_code"])
         if qid_clash or (a and area and a != area):
-            cid = concept_id(label_en, label_ko, suffix=field_code)
+            digits = re.sub(r"\D", "", qid)
+            options = [s for s in (field_code, f"q{digits}" if digits else "") if s]
+            cands = [concept_id(label_en, label_ko, s) for s in options]
+            cid = next((c for c in cands if _usable(graph.get_node(c), qid, area)), "")
+            n = 2
+            while not cid:
+                if not graph.get_node(c := f"{base_id}-{n}"):
+                    cid = c
+                n += 1
     graph.upsert_node(cid, "concept", label_ko, label_en, wikidata=qid, field_code=field_code)
     if hit and hit.get("label") and norm(hit["label"]) != norm(label_en):
         graph.add_alias(hit["label"], cid)

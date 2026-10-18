@@ -95,3 +95,43 @@ def test_wikidata_parents():
                    "P31": [{"mainsnak": {"snaktype": "novalue"}},
                            {"mainsnak": {"datavalue": {"value": {"id": "Q2"}}}}]}}))
     assert wikidata.parents("Q5") == ["Q1", "Q2"]
+
+
+def test_split_bilingual_rejects_english_disambiguation():
+    assert canon.split_bilingual("Spin (physics)") == ("Spin (physics)", "")
+    assert canon.split_bilingual("함수 (f)") == ("함수 (f)", "")
+    assert canon.split_bilingual("블랙홀 (black hole)") == ("블랙홀", "black hole")
+
+
+def test_homonym_by_area_offline(data_dir):
+    assert canon.canon("스핀", "Spin", "B4") == "spin"
+    assert canon.canon("스핀", "Spin", "N3") == "spin-n3"
+    assert canon.canon("스핀", "Spin", "N3") == "spin-n3"  # stable, no duplicates
+
+
+def test_same_qid_merges_across_areas(data_dir):
+    a = canon.canon("스핀", "Spin", "B4", lookup=hit("Q1"))
+    assert canon.canon("스핀", "Spin", "N3", lookup=hit("Q1")) == a
+
+
+def test_clash_without_field_code_never_overwrites(data_dir):
+    a = canon.canon("스핀", "Spin", "B4", lookup=hit("Q1"))
+    b = canon.canon("스핀", "Spin", "", lookup=hit("Q2"))
+    assert b == "spin-q2" and a == "spin"
+    assert graph.get_node("spin")["wikidata"] == "Q1"
+
+
+def test_attaches_qid_to_existing_node(data_dir):
+    a = canon.canon("블랙홀", "Black Hole", "B4")
+    assert graph.get_node(a)["wikidata"] == ""
+    assert canon.canon("블랙홀", "", "B4", lookup=hit("Q589")) == a
+    assert graph.get_node(a)["wikidata"] == "Q589"
+
+
+@respx.mock
+def test_wikidata_skips_disambiguation_pages():
+    respx.get("https://www.wikidata.org/w/api.php").mock(return_value=httpx.Response(200, json={
+        "search": [{"id": "Q1", "label": "Spin", "description": "Wikimedia disambiguation page"},
+                   {"id": "Q2", "label": "Spin", "description": "동음이의 문서"},
+                   {"id": "Q3", "label": "Spin", "description": "quantum property"}]}))
+    assert wikidata.search_entity("spin", "en")["id"] == "Q3"
