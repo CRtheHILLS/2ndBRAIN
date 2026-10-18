@@ -429,3 +429,36 @@ def test_catalog_backfill_endpoint(data_dir):
         assert r.status_code == 200 and r.json() == {"registered": 1}
         assert c.post("/catalog/backfill", headers=TOKEN).json() == {"registered": 0}
         assert [i["file"] for i in c.get("/catalog/pending").json()] == ["old.txt"]
+
+
+def test_after_learn_triggers_rebridge(data_dir, monkeypatch):
+    from brain import bridge
+    calls = {}
+
+    def rebridge(ids, **kw):
+        calls["rebridge"] = list(ids)
+        return [{"src": ids[0], "dst": "angular-momentum", "rel": "bridge", "reason": "이유"}]
+    monkeypatch.setattr(bridge, "rebridge", rebridge)
+    monkeypatch.setattr(bridge, "rerender_affected", lambda ids: calls.setdefault("rerender", list(ids)))
+    entry = {"id": "ab" * 32, "book": "헬리콥터", "title": "자이로", "field_code": "B2",
+             "concept_pairs": [{"ko": "자이로스코프", "en": "Gyroscope"}]}
+    assert catalog._after_learn([entry]) == ["gyroscope"]
+    assert calls["rebridge"] == ["gyroscope"]
+    assert set(calls["rerender"]) == {"gyroscope", "angular-momentum"}
+
+    def broken(ids, **kw):
+        raise think.ThinkUnavailable(["no key"])
+    monkeypatch.setattr(bridge, "rebridge", broken)
+    entry2 = {**entry, "id": "cd" * 32, "concept_pairs": [{"ko": "로터", "en": "Rotor"}]}
+    assert catalog._after_learn([entry2]) == ["rotor"]  # never breaks /catalog/learn
+
+
+def test_after_learn_leaves_quest_books_to_the_bridge_stage(data_dir, monkeypatch):
+    from brain import bridge, quest
+    quest.save("quest-heli", {"slug": "quest-heli", "plan": {"title_ko": "헬리콥터"}})
+    seen = []
+    monkeypatch.setattr(bridge, "rebridge", lambda ids, **kw: seen.append(list(ids)) or [])
+    entry = {"id": "ef" * 32, "book": "quest-heli", "title": "자이로", "field_code": "B2",
+             "concept_pairs": [{"ko": "자이로스코프", "en": "Gyroscope"}]}
+    assert catalog._after_learn([entry]) == ["gyroscope"]
+    assert seen == []

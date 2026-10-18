@@ -261,8 +261,34 @@ def stage_teach(slug: str) -> None:
 # --- later tasks --------------------------------------------------------------
 
 
-def stage_bridge(slug: str) -> None:  # Task 15
-    pass
+def stage_bridge(slug: str) -> None:
+    """Link this quest's concepts to concepts learned in other books/quests (honest links only).
+
+    ``summary.bridges`` counts all visible cross-book links for this quest's concepts, not only
+    the ones made in this run.
+    """
+    from . import bridge, render
+    days = [d["n"] for d in quest.load(slug)["plan"]["days"]]
+    lessons = {n: render.load_day(slug, n) for n in days}
+    taught = [d["concept_id"] for les in lessons.values() if les for d in les["dots"] if d["concept_id"]]
+    node_ids = list(dict.fromkeys(graph.node_ids_in_book(slug, kind="concept") + taught))
+    made = bridge.rebridge(node_ids, slug=slug, task_id="bridge")
+    shown = bridge.bridges_for(node_ids)
+    q = quest.load(slug)  # think_or_cached saved the budget meanwhile
+    q["summary"]["bridges"] = len(shown)
+    q["summary"]["bridges_top"] = [{"a": b["src_label"], "b": b["dst_label"], "reason": b["reason"]}
+                                   for b in shown[:3]]
+    quest.save(slug, q)
+    quest.log(slug, event="bridge", made=len(made), shown=len(shown))
+    bridged = {graph.resolve(b["src"]) for b in shown}
+    for n, les in lessons.items():
+        if les and bridged & {graph.resolve(d["concept_id"]) for d in les["dots"] if d["concept_id"]}:
+            render.render_quest_day(slug, n)
+    render.render_quest(slug)
+    if made:  # older quests that teach the other ends get their pages refreshed too
+        others = [s for s in bridge.affected_quests([b["dst"] for b in made]) if s != slug]
+        if others:
+            bridge.rerender_affected([b["dst"] for b in made])
 
 
 def stage_archive(slug: str) -> None:

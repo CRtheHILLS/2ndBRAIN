@@ -399,3 +399,37 @@ def test_delete_book_removes_files_and_shelf_entry(data_dir):
 
     shelf = (data_dir / "site" / "index.html").read_text("utf-8")
     assert "코스모스" not in shelf and "양자역학" in shelf
+
+
+def test_rebridge_route_requires_token_and_returns_counts(data_dir, monkeypatch):
+    from api.main import app
+    from brain import bridge, graph, think
+    graph.upsert_node("gyroscope", "concept", "자이로스코프", field_code="B2")
+    graph.upsert_node("spin", "concept", "스핀", field_code="B3")
+    graph.upsert_node("book:x", "book", "x", field_code="B2")
+    seen = []
+
+    def rebridge(ids, **kw):
+        seen.append(sorted(ids))
+        return [{"src": "gyroscope", "dst": "spin", "rel": "bridge", "reason": "이유"}]
+    monkeypatch.setattr(bridge, "rebridge", rebridge)
+    monkeypatch.setattr(bridge, "rerender_affected", lambda ids: [])
+    tok = {"X-Brain-Token": "test-token"}
+    with TestClient(app) as c:
+        assert c.post("/graph/rebridge").status_code == 401
+        r = c.post("/graph/rebridge?field=B2", headers=tok)
+        assert r.status_code == 200 and r.json() == {"targets": 1, "bridges": 1}
+        assert seen[-1] == ["gyroscope"]  # concepts only
+        limits = []
+        real_recent = bridge.recent_concepts
+        monkeypatch.setattr(bridge, "recent_concepts", lambda n: limits.append(n) or real_recent(n))
+        c.post("/graph/rebridge?limit=1000", headers=tok)
+        assert limits == [100]  # clamp: at most 20 think calls per request
+        r = c.post("/graph/rebridge?limit=50", headers=tok)
+        assert r.json() == {"targets": 2, "bridges": 1}
+
+        def unavailable(ids, **kw):
+            raise think.ThinkUnavailable(["anthropic: no key"])
+        monkeypatch.setattr(bridge, "rebridge", unavailable)
+        r = c.post("/graph/rebridge", headers=tok)
+        assert r.status_code == 503 and "no key" in r.json()["detail"]
