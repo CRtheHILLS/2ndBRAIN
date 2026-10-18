@@ -269,3 +269,44 @@ def test_plan_tokens_strip_particles_and_stopwords():
 def test_stage_names_reexported_from_quest():
     assert quest.STAGE_FUNCS is quest_stages.STAGE_FUNCS
     assert quest.stage_plan is quest_stages.stage_plan
+
+def test_full_run_creates_bridge_to_prior_book(fakes, monkeypatch):
+    graph.ingest_card({"id": "aa" * 32, "book": "양자역학", "title": "각운동량 입문", "field_code": "B2",
+                       "concept_pairs": [{"ko": "각운동량", "en": "Angular momentum"}]})
+    reason = "자이로스코프가 쓰러지지 않는 건 각운동량이 지켜지기 때문이에요."
+    plan = {"kind": "topic", "title_ko": "헬리콥터", "title_en": "Helicopter",
+            "one_line_goal": "헬리콥터가 어떻게 뜨는지 안다",
+            "days": [{"n": 1, "big_idea": "도는 것은 버틴다",
+                      "dots": [{"concept_ko": "자이로스코프", "concept_en": "Gyroscope",
+                                "queries_ko": ["자이로스코프"]}]}]}
+    batch = {"cards": [{"index": i, "title": f"자료{i}", "summary": "요약", "domain": "과학",
+                        "field_code": "B2",
+                        "concept_pairs": [{"ko": "자이로스코프", "en": "Gyroscope"}]} for i in range(1, 6)]}
+    lesson = {"n": 1, "big_idea_one_line": "도는 것은 버틴다", "story_opening": "이야기",
+              "dots": [{"concept_ko": "자이로스코프", "one_line": "도는 바퀴"}],
+              "quiz": [{"q": "질문", "a": "답"}] * 3}
+    bridge_users = []
+
+    def fake(kind, system, user, schema=None, *, smart=None, log_path=None):
+        fakes.calls.append(kind)
+        if kind == "bridge":
+            bridge_users.append(user)
+            data = {"verdicts": [{"src": "gyroscope", "dst": "angular-momentum", "connects": True,
+                                  "rel": "bridge", "reason": reason}]}
+        else:
+            data = {"plan": plan, "classify": batch, "teach": lesson}[kind]
+        return think.ThinkResult(data, "fake", "fake-1", 10, 20, 0.01)
+    monkeypatch.setattr(think, "think", fake)
+
+    slug = quest.create("헬리콥터 배우고 싶어", days=1)["slug"]
+    assert quest.run(slug)["status"] == "done"
+    assert fakes.calls.count("bridge") == 1 and "각운동량" in bridge_users[0]
+    edges = graph.neighbors("gyroscope", rels=["bridge"])["edges"]
+    assert [(e["src"], e["dst"], e["reason"]) for e in edges] == [("gyroscope", "angular-momentum", reason)]
+    q = quest.load(slug)
+    assert q["summary"]["bridges"] == 1
+    assert q["summary"]["bridges_top"] == [{"a": "자이로스코프", "b": "각운동량", "reason": reason}]
+    day = (store.site_dir() / "quests" / slug / "day-1.html").read_text("utf-8")
+    assert "각운동량" in day and reason in day and "양자역학에서 배움" in day
+    index = (store.site_dir() / "quests" / slug / "index.html").read_text("utf-8")
+    assert "각운동량" in index

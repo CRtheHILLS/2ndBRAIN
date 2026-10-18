@@ -60,7 +60,7 @@
 
   <section>
     <h2>🌉 다른 때 배운 것과 잇기</h2>
-    {% if bridges %}<ul>{% for b in bridges %}<li><b>{{ b.src_label }}</b> ↔ <b>{{ b.dst_label }}</b>{% if b.reason %} — {{ b.reason }}{% endif %}</li>{% endfor %}</ul>
+    {% if bridges %}<ul>{% for b in bridges %}<li><b>{{ b.src_label }}</b> ↔ <b>{{ b.dst_label }}</b>{% if b.dst_books %} <span class="muted">({{ b.dst_books|join(', ') }}에서 배움)</span>{% endif %}{% if b.reason %} — {{ b.reason }}{% endif %}</li>{% endfor %}</ul>
     {% else %}<p class="muted">아직 없어요. 다른 주제를 배우면 여기에 저절로 이어져요.</p>{% endif %}
   </section>
 

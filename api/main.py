@@ -761,6 +761,29 @@ def graph_rebuild():
     return {"replayed": graph.rebuild()}
 
 
+REBRIDGE_CHUNK = 5  # nodes per think call (5 x 8 candidates = the 40-pair batch)
+
+
+@app.post("/graph/rebridge", dependencies=[Depends(require_token)])
+def graph_rebridge(field: str | None = None, limit: int = 50):
+    from brain import bridge
+    limit = max(1, min(limit, 500))
+    if field:
+        targets = [n["id"] for n in graph.by_field(field, 10**6) if n["kind"] == "concept"][:limit]
+    else:
+        targets = bridge.recent_concepts(limit)
+    made: list[dict] = []
+    try:
+        for i in range(0, len(targets), REBRIDGE_CHUNK):
+            made += bridge.rebridge(targets[i:i + REBRIDGE_CHUNK], strict=True)
+    except think.ThinkUnavailable as e:
+        raise HTTPException(503, f"생각 담당(모델)을 지금 쓸 수 없어요: {'; '.join(e.reasons)}")
+    finally:
+        if made:
+            bridge.rerender_affected(list(dict.fromkeys(x for b in made for x in (b["src"], b["dst"]))))
+    return {"targets": len(targets), "bridges": len(made)}
+
+
 @app.get("/debug/fs", dependencies=[Depends(require_token)])
 def debug_fs():
     data_dir = get_settings().data_dir

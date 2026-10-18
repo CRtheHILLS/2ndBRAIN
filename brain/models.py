@@ -146,9 +146,22 @@ class DayLesson(BaseModel):
     clair_one_liner: str = ""
 
 
+class BridgeVerdict(BaseModel):
+    src: str
+    dst: str
+    connects: bool
+    rel: Literal["bridge", "requires", "is_a", "related"] = "bridge"
+    reason: str = ""
+
+
+class BridgeBatch(BaseModel):
+    verdicts: list[BridgeVerdict] = Field(default_factory=list)
+
+
 # schema name (as stored in a quest task file) -> model class
 SCHEMAS: dict[str, type[BaseModel]] = {
     "QuestPlan": QuestPlan,
     "CatalogBatch": CatalogBatch,
     "DayLesson": DayLesson,
+    "BridgeBatch": BridgeBatch,
 }

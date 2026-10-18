@@ -17,6 +17,7 @@ import datetime as dt
 import hashlib
 import itertools
 import json
+import logging
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -25,6 +26,8 @@ from . import frame, models, prompts, store, think
 from . import graph as knowledge_graph
 from .config import get_settings
 from .think import parse_json
+
+log = logging.getLogger(__name__)
 
 DOMAINS = ["과학", "역사", "종교", "철학", "심리", "경제", "기술", "예술", "동물", "건강", "기타"]
 
@@ -289,9 +292,28 @@ def learn_one(entry: dict, llm_complete=None) -> dict | None:
 def _after_learn(entries: list[dict]) -> list[str]:
     """Put freshly learned entries into the graph; returns new concept ids."""
     out: list[str] = []
+    to_bridge: list[str] = []
     for e in entries:
-        out.extend(c for c in knowledge_graph.ingest_card(e) if c not in out)
+        new = [c for c in knowledge_graph.ingest_card(e) if c not in out]
+        out.extend(new)
+        if not _is_quest_book(e.get("book") or ""):  # a quest bridges its own concepts in its stage
+            to_bridge.extend(new)
+    if to_bridge:
+        try:
+            from . import bridge
+            made = bridge.rebridge(to_bridge)
+            if made:
+                bridge.rerender_affected(list(dict.fromkeys(x for b in made for x in (b["src"], b["dst"]))))
+        except Exception as e:  # noqa: BLE001 - bridging must never break /catalog/learn
+            log.warning("새 개념 다리 놓기 실패(학습은 저장됨): %s", e)
     return out
+
+
+def _is_quest_book(book: str) -> bool:
+    if not book:
+        return False
+    from . import quest
+    return (quest.quest_dir(book) / "quest.json").is_file()
 
 
 def learn_pending(limit: int = 10, llm_complete=None, book: str | None = None,
