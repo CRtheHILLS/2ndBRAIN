@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import llm, store
 from .config import get_settings
+from .think import parse_json
 
 DOMAINS = ["과학", "역사", "종교", "철학", "심리", "경제", "기술", "예술", "동물", "건강", "기타"]
 
@@ -171,17 +172,7 @@ def get_entry(entry_id: str) -> dict | None:
 # learning
 # ---------------------------------------------------------------------------
 
-def _parse_json(raw: str) -> dict | None:
-    """Same balanced-brace salvage distill uses: take the outermost {...}."""
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        return None
-    try:
-        d = json.loads(raw[start:end + 1])
-    except json.JSONDecodeError:
-        return None
-    return d if isinstance(d, dict) else None
+_parse_json = parse_json  # salvage logic lives in think.py
 
 
 def _str_list(v, limit: int) -> list[str]:
