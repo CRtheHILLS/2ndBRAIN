@@ -140,11 +140,22 @@ def remove_pending(entry_id: str) -> None:
     _write_all([r for r in list_pending() if r["id"] != entry_id])
 
 
+
+def is_unfilled(text: str) -> bool:
+    """True when the submitted transcription is still the empty skeleton (or only comments)."""
+    if "<!--" in text:
+        return True
+    head = text.split("## 표시 목록", 1)[0]
+    return not head.strip()
+
+
 def complete(entry_id: str, text: str) -> dict:
     """Fill the markdown body with Clair's transcription and put the file on the learn queue."""
     entry = next((r for r in list_pending() if r["id"] == entry_id), None)
     if entry is None:
         raise KeyError(entry_id)
+    if is_unfilled(text):
+        raise ValueError("판독 내용이 비어 있어요. 뼈대만 제출됐어요 — 글자를 채운 뒤 다시 보내 주세요.")
     md = Path(entry["path"])
     meta, _ = store.read_md(md)
     meta["ocr"] = "done"

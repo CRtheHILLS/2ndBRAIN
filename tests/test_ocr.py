@@ -153,3 +153,21 @@ def test_reupload_pending_without_queue_entry_retries(gem):
     ocr.remove_pending(catalog.make_id("book", "r2.jpg"))
     ingest.ingest_file("book", "r2.jpg", b"\xff\xd8r2")
     assert [r["file"] for r in ocr.list_pending()] == ["r2.jpg"]
+
+
+def test_complete_refuses_unfilled_skeleton(data_dir):
+    md = store.raw_dir("b") / "x.md"
+    store.write_md(md, {"book": "b", "source": "x.jpg", "sha256": "s", "kind": "image", "ocr": "pending"}, "")
+    ocr.add_pending({"id": "e1", "book": "b", "file": "x.jpg", "path": str(md), "image": str(md), "mime": "image/jpeg"})
+    skeleton = "<!-- 여기에 글자 -->\n\n## 표시 목록\n- 없음\n## 독자 메모\n\n## 쪽수\n모름\n"
+    with pytest.raises(ValueError):
+        ocr.complete("e1", skeleton)
+    assert any(r["id"] == "e1" for r in ocr.list_pending())
+    assert ocr.is_unfilled("\n## 표시 목록\n- 없음")
+    assert not ocr.is_unfilled("본문 글자\n## 표시 목록\n- 없음")
+
+
+def test_prompt_pins_korean_headings():
+    from brain import llm
+    assert "never translate or rename them" in llm.OCR_SYSTEM
+    assert "No code fences" in llm.OCR_SYSTEM

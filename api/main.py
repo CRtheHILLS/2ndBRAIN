@@ -720,6 +720,8 @@ def ocr_submit(entry_id: str, body: OcrText):
         entry = ocr.complete(entry_id, body.text)
     except KeyError:
         raise HTTPException(404, "대기 중인 항목이 아니에요")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"id": entry["id"], "book": entry["book"], "file": entry["file"], "ocr": "done"}
 
 

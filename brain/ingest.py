@@ -159,7 +159,7 @@ def ingest_file(slug: str, filename: str, data: bytes, extra_meta: dict | None =
             return out
         prior = old  # pending md lost its queue entry: retry OCR and re-queue
     (store.raw_dir(slug) / filename).write_bytes(data)  # keep original, before any llm call
-    ocr_state, pending_mime = "none", None
+    ocr_state, pending_mime, pending_reason = "none", None, ""
     if ext in HEIC_EXTS or ext in IMG:
         kind = "image"
         jpeg = ext in HEIC_EXTS
@@ -169,8 +169,9 @@ def ingest_file(slug: str, filename: str, data: bytes, extra_meta: dict | None =
                 raise ocr.OcrUnavailable(["clair-first"])  # Clair reads Telegram photos herself
             body = ocr.ocr_image(_to_jpeg(data, ext) if jpeg else data, mime)
             ocr_state = "done"
-        except ocr.OcrUnavailable:
+        except ocr.OcrUnavailable as e:
             body, ocr_state, pending_mime = "", "pending", IMG.get(ext, mime)
+            pending_reason = "; ".join(getattr(e, "reasons", []) or [])
     elif ext == ".pdf":
         kind = "pdf"
         body, incomplete = _pdf_text(data)
@@ -191,7 +192,7 @@ def ingest_file(slug: str, filename: str, data: bytes, extra_meta: dict | None =
     if ocr_state == "pending":
         ocr.add_pending({"id": catalog.make_id(slug, filename), "book": slug, "file": filename,
                          "path": str(out), "image": str(store.raw_dir(slug) / filename),
-                         "mime": pending_mime})
+                         "mime": pending_mime, "reason": pending_reason})
     else:
         _catalog_register(slug, filename, out, sha, hold_until)
     return out

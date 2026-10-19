@@ -222,3 +222,13 @@ def test_ocr_submit_posts_text(monkeypatch, tmp_path):
     f.write_text("읽은 글", "utf-8")
     assert learn_cli.main(BASE + ["ocr", "submit", "abc123", str(f)]) == 0
     assert calls[-1][:2] == ("POST", "/ocr/abc123") and calls[-1][4] == {"text": "읽은 글"}
+
+
+def test_ocr_submit_refuses_skeleton(monkeypatch, tmp_path, capsys):
+    calls = []
+    monkeypatch.setattr(learn_cli, "fetch_json", _fake(calls, {}))
+    f = tmp_path / "x.txt"
+    f.write_text("<!-- 여기에 -->\n## 표시 목록\n- 없음\n", "utf-8")
+    assert learn_cli.main(BASE + ["ocr", "submit", "abc", str(f)]) == 2
+    assert not calls
+    assert "비어 있어요" in capsys.readouterr().err

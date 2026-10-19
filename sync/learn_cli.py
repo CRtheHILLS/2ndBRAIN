@@ -350,6 +350,10 @@ def cmd_ocr_submit(ctx, ns):
     except OSError as e:
         print(f"파일을 읽지 못했어요: {e}", file=sys.stderr)
         return 2
+    head = text.split("## 표시 목록", 1)[0]
+    if "<!--" in text or not head.strip():
+        print("판독 내용이 비어 있어요. 뼈대 파일에 글자를 채운 뒤 다시 보내 주세요.", file=sys.stderr)
+        return 2
     entry = _resolve_ocr_id(ctx, ns.id)
     r = ctx.call("POST", f"/ocr/{entry['id']}", json_body={"text": text})
     print(f"받았어요 ({r.get('book')} / {r.get('file')}). 학습 대기열에 올렸어요.")

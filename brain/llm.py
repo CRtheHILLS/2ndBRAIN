@@ -29,7 +29,8 @@ Rules:
 - Every reader-marked passage must also appear inline in the page text wrapped as ==...==, and every [kind] entry must quote the same words.
 - If there is no handwriting, write "## 독자 메모" followed by "- 없음".
 - Page number: read the printed number at the top or bottom; write 모름 if not visible.
-- Output only this Markdown, nothing else."""
+- The three headings (## 표시 목록, ## 독자 메모, ## 쪽수) and the [kind] labels are fixed Korean strings: never translate or rename them. Only the quoted passages and notes follow the page's language.
+- Output only this Markdown, nothing else. No code fences, no preamble."""
 
 def _client(): return Anthropic(api_key=get_settings().anthropic_api_key)
 
