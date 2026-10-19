@@ -18,6 +18,7 @@ import hashlib
 import itertools
 import json
 import logging
+import os
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -104,7 +105,12 @@ def queued() -> list[dict]:
 
 def register(book: str, filename: str, raw_path: Path, sha256: str,
              hold_until: str | None = None) -> dict:
-    """Put one raw file on the learn queue. Idempotent by (book, filename)."""
+    """Put one raw file on the learn queue. Idempotent by (book, filename).
+
+    ``hold_until`` is an optional local-time ISO string with seconds precision
+    (``datetime.now().isoformat(timespec="seconds")`` style); until then the
+    item is hidden from ``pending()`` (grace period for moving/deleting it).
+    """
     entry_id = make_id(book, filename)
     for item in _read_queue():
         if item["id"] == entry_id:
@@ -159,21 +165,25 @@ def forget(book: str, filename: str) -> bool:
     q = _read_queue()
     keep = [i for i in q if i["id"] != entry_id]
     if len(keep) != len(q):
-        queue_path().write_text("".join(json.dumps(i, ensure_ascii=False) + "\n" for i in keep), "utf-8")
+        qp = queue_path()
+        tmp = qp.with_suffix(".jsonl.tmp")
+        tmp.write_text("".join(json.dumps(i, ensure_ascii=False) + "\n" for i in keep), "utf-8")
+        os.replace(tmp, qp)
         removed = True
     p = entry_path(entry_id)
     if p.is_file():
         p.unlink()
         removed = True
-        try:
-            knowledge_graph.remove_node("src:" + entry_id[:16])
-        except Exception as e:  # noqa: BLE001
-            log.warning("graph node removal failed: %s", e)
+    try:
+        if knowledge_graph.remove_node("src:" + entry_id[:16]):
+            removed = True
+    except Exception as e:  # noqa: BLE001
+        log.warning("graph node removal failed: %s", e)
     try:
         from . import ocr
-        fn = getattr(ocr, "remove_pending", None)
-        if fn:
-            fn(entry_id)
+        if any(r.get("id") == entry_id for r in ocr.list_pending()):
+            removed = True
+        ocr.remove_pending(entry_id)
     except Exception as e:  # noqa: BLE001
         log.warning("ocr pending removal failed: %s", e)
     return removed
@@ -429,8 +439,12 @@ def stats() -> dict:
     books |= {e.get("book") for e in done if e.get("book")}
     concepts = {c for e in done for c in (e.get("concepts") or [])}
     learned_ids = {e.get("id") for e in done}
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    waiting = [i for i in q if i["id"] not in learned_ids]
+    held = sum(1 for i in waiting if i.get("hold_until") and str(i["hold_until"]) > now)
     return {
-        "pending": sum(1 for i in q if i["id"] not in learned_ids),
+        "pending": len(waiting) - held,
+        "held": held,
         "learned": len(done),
         "books": len(books),
         "concepts": len(concepts),

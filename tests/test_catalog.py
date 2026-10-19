@@ -307,13 +307,13 @@ def test_graph_is_empty_without_learned_entries(data_dir):
 
 
 def test_stats_shape(data_dir):
-    assert catalog.stats() == {"pending": 0, "learned": 0, "books": 0, "concepts": 0}
+    assert catalog.stats() == {"pending": 0, "held": 0, "learned": 0, "books": 0, "concepts": 0}
     ingest.ingest_file("cosmos", "a.txt", "가".encode())
     ingest.ingest_file("quantum", "b.txt", "나".encode())
-    assert catalog.stats() == {"pending": 2, "learned": 0, "books": 2, "concepts": 0}
+    assert catalog.stats() == {"pending": 2, "held": 0, "learned": 0, "books": 2, "concepts": 0}
     catalog.learn_one(catalog.pending()[0], llm_complete=_fake(_card()))
     s = catalog.stats()
-    assert s == {"pending": 1, "learned": 1, "books": 2, "concepts": 2}
+    assert s == {"pending": 1, "held": 0, "learned": 1, "books": 2, "concepts": 2}
 
 
 # ---------------------------------------------------------------------------
@@ -379,7 +379,7 @@ def test_catalog_stats_and_pending_are_open(data_dir):
                files={"file": ("a.txt", "우주".encode())})
         r = c.get("/catalog/stats")
         assert r.status_code == 200
-        assert r.json() == {"pending": 1, "learned": 0, "books": 1, "concepts": 0}
+        assert r.json() == {"pending": 1, "held": 0, "learned": 0, "books": 1, "concepts": 0}
 
         r = c.get("/catalog/pending")
         assert r.status_code == 200
@@ -497,3 +497,36 @@ def test_forget_removes_queue_entry_card_and_graph_node(data_dir, monkeypatch):
 
 def test_forget_unknown_returns_false(data_dir):
     assert catalog.forget("nope", "nothing.md") is False
+
+
+def test_stats_pending_excludes_held(data_dir):
+    import datetime as dt
+    fut = (dt.datetime.now() + dt.timedelta(minutes=30)).isoformat(timespec="seconds")
+    catalog.register("b", "held.md", data_dir / "x.md", "s1", hold_until=fut)
+    catalog.register("b", "ready.md", data_dir / "y.md", "s2")
+    s = catalog.stats()
+    assert s["pending"] == len(catalog.pending()) == 1 and s["held"] == 1
+
+
+def test_forget_queue_only_item_returns_true(data_dir):
+    catalog.register("b", "a.md", data_dir / "a.md", "s1")
+    assert catalog.forget("b", "a.md") is True
+    assert catalog.queued() == []
+
+
+def test_forget_removes_ocr_pending_entry(data_dir):
+    from brain import ocr
+    ocr.add_pending({"book": "b", "file": "p.jpg", "path": str(data_dir / "p.md")})
+    assert catalog.forget("b", "p.jpg") is True
+    assert ocr.list_pending() == []
+
+
+def test_catalog_stats_endpoint_counts_held_separately(data_dir):
+    import datetime as dt
+    from api.main import app
+    fut = (dt.datetime.now() + dt.timedelta(minutes=30)).isoformat(timespec="seconds")
+    catalog.register("b", "held.md", data_dir / "x.md", "s1", hold_until=fut)
+    catalog.register("b", "ready.md", data_dir / "y.md", "s2")
+    with TestClient(app) as c:
+        j = c.get("/catalog/stats").json()
+    assert j["pending"] == 1 and j["held"] == 1
