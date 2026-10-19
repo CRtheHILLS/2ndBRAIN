@@ -1,7 +1,8 @@
 # NEXT.md — 2nd BRAIN (Clair)
 
 ## 2026-10-19 텔레그램 책 사진 접수 봇 (@SexyClair_bot) — 배포 중
-- [ ] 배포 후: `POST /telegram/setup`(웹훅·명령 메뉴 등록) → `POST /graph/rebuild`(묘비 테이블 전환 1회) → CR이 봇에 책 제목 + 사진 2장 → 확인 메시지·볼륨 파일·OCR 결과(또는 읽기 대기) 확인 → 🧠 이 책에서 배우기
+- [x] 배포·웹훅 등록·명령 메뉴·그래프 재생성 완료 (2026-10-19). 웹훅 비밀 없는 요청은 403
+- [ ] CR 실사용: 봇에 책 제목 + 사진 2장 → 확인 메시지·볼륨 파일·OCR 결과(또는 읽기 대기) 확인 → 🧠 이 책에서 배우기
 - [ ] 세션 시작 루틴에 추가됨: `brain-learn ocr list` → 대기 이미지가 있으면 Clair가 읽어 `ocr submit` (CLAUDE.md §1)
 - [ ] 나중에: `brain/intake.py`(574줄) 분리; 봇 알림은 서버 재시작 때 유실됨; 처리 순서는 도착순(앨범은 2초 창으로 묶음)
 - 메모리: telegram-book-intake. 비밀값은 Railway 변수와 .env에만.
