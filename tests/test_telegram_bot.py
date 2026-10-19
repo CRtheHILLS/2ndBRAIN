@@ -68,25 +68,28 @@ def env(data_dir, monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", TOKEN)
     monkeypatch.setenv("BRAIN_PUBLIC_URL", "https://brain.example")
     config.get_settings.cache_clear()
-    ocr_state = {"value": "done"}
+    ocr_state = {"value": "done", "body": "본문"}
 
-    def fake_ingest(slug, filename, data, extra_meta=None):
+    def fake_ingest(slug, filename, data, extra_meta=None, hold_until=None):
         raw = store.raw_dir(slug)
         (raw / filename).write_bytes(data)
         out = raw / (Path(filename).stem + ".md")
         sha = hashlib.sha256(data).hexdigest()
         store.write_md(out, {"book": slug, "source": filename, "sha256": sha, "kind": "image",
-                             "ocr": ocr_state["value"], **(extra_meta or {})}, "본문")
-        catalog.register(slug, filename, out, sha)
+                             "ocr": ocr_state["value"], **(extra_meta or {})},
+                      "" if ocr_state["value"] == "pending" else ocr_state["body"])
+        catalog.register(slug, filename, out, sha, hold_until=hold_until)
         return out
 
     monkeypatch.setattr(ingest, "ingest_file", fake_ingest)
     monkeypatch.setattr(index, "rebuild", lambda: 0)
     clock = Clock()
     monkeypatch.setattr(S, "now_seoul", clock)
+    scheduled = []  # no real timer threads in tests: notices are flushed by hand
+    monkeypatch.setattr(telegram_bot, "_schedule_notices", lambda api: scheduled.append(api))
     store.upsert_book("손자병법", "손자병법")
     store.upsert_book("창세기", "창세기")
-    return {"api": FakeAPI(), "clock": clock, "ocr": ocr_state, "ids": itertools.count(1)}
+    return {"api": FakeAPI(), "clock": clock, "ocr": ocr_state, "ids": itertools.count(1), "scheduled": scheduled}
 
 
 def _send(env, **message):
@@ -262,8 +265,11 @@ def test_ocr_pending_message(env):
     env["ocr"]["value"] = "pending"
     set_book(env)
     photo(env, "f1")
-    assert "📦 사진은 안전하게 보관했어요. 글자는 Clair가 다음 세션에서 읽을게요. (읽기 대기 1장)" \
-        in env["api"].calls[0]["text"]
+    assert "📦" not in env["api"].calls[0]["text"]  # the reading result comes as its own notice
+    env["clock"].tick(seconds=91)
+    assert telegram_bot.flush_batch_notices(env["api"]) == 1
+    assert env["api"].calls[-1]["text"] == \
+        "📦 사진은 안전하게 보관했어요. 글자는 Clair가 다음 세션에서 읽을게요. (읽기 대기 1장)"
 
 
 def test_duplicate_photo_is_counted(env):
@@ -547,3 +553,120 @@ def test_one_day_learn_sentence_differs(env, monkeypatch):
     text(env, telegram_bot.MENU_LEARN)
     press_label(env, "하루 압축")
     assert created == ["《손자병법》 책에서 밑줄 친 부분을 중심으로 하루 동안 깊이 이해하고 싶어"]
+
+
+# --- T3c: sticky holding, purge warning, OCR notices, cancel scope -------------
+
+def test_holding_is_sticky_even_with_a_current_book(env):
+    photo(env, "h1")  # no book yet -> holding
+    S.ui_set("pending_choice", None)
+    intake.set_current("손자병법", "손자병법")  # e.g. set from elsewhere; holding still waits
+    photo(env, "h2")
+    assert intake.holding_count() == 2 and intake.book_count("손자병법") == 0
+    sends = env["api"].of("send")
+    assert len(sends) == 1 and env["api"].calls[-1]["m"] == "edit"  # question < 10 min: edited
+    env["clock"].tick(minutes=11)
+    photo(env, "h3")
+    assert intake.holding_count() == 3
+    assert len(env["api"].of("send")) == 2  # older question: asked again as a new message
+    assert env["api"].calls[-1]["text"].endswith("이 사진 3장, 어느 책이에요?")
+    assert S.ui_get("holding_msg")["message_id"] == env["api"].calls[-1]["mid"]
+    press_label(env, "《창세기》")
+    assert intake.book_count("창세기") == 3 and intake.holding_count() == 0
+
+
+def test_purge_warning_once_then_purge(env, monkeypatch):
+    monkeypatch.setattr(telegram_bot, "_proactive_api", lambda: (env["api"], CHAT))
+    photo(env, "old")
+    env["api"].calls.clear()
+    t0 = env["clock"].t
+    assert intake.purge_holding(24, now=t0 + dt.timedelta(hours=22)) == 0
+    assert env["api"].calls == []
+    assert intake.purge_holding(24, now=t0 + dt.timedelta(hours=23)) == 0
+    (warn,) = env["api"].calls
+    assert warn["m"] == "send"
+    assert warn["text"] == "⏳ 보류 중인 사진 1장이 1시간 뒤 지워져요. 어느 책인지 골라 주세요."
+    labels = [b["text"] for row in warn["markup"]["inline_keyboard"] for b in row]
+    assert "《손자병법》" in labels and "➕ 새 책" in labels
+    intake.purge_holding(24, now=t0 + dt.timedelta(hours=23, minutes=30))
+    assert len(env["api"].calls) == 1  # once per holding generation
+    assert intake.purge_holding(24, now=t0 + dt.timedelta(hours=24)) == 1
+    assert intake.holding_count() == 0 and list(S.holding_dir().iterdir()) == []
+    assert S.ui_get("holding_msg") is None
+
+
+def test_ocr_done_notice_and_underlines(env):
+    env["ocr"]["body"] = "앞 ==첫 번째 밑줄== 중간 ==두 번째\n밑줄== 끝"
+    set_book(env)
+    photo(env, "u1")
+    photo(env, "u2")
+    assert len(env["scheduled"]) == 2
+    assert telegram_bot.flush_batch_notices(env["api"]) == 0  # batch still open (< 90 s)
+    env["clock"].tick(seconds=91)
+    assert telegram_bot.flush_batch_notices(env["api"]) == 1
+    notice = env["api"].calls[-1]
+    assert notice["text"] == "✍️ 2장 읽었어요 · 밑줄 4군데"
+    labels = [b["text"] for row in notice["markup"]["inline_keyboard"] for b in row]
+    assert labels == ["📝 밑줄 보기", "🧠 이 책에서 배우기"]
+    assert telegram_bot.flush_batch_notices(env["api"]) == 0  # reported once
+    press_label(env, "📝 밑줄 보기")
+    assert env["api"].calls[-1]["text"] == ("📝 밑줄 친 곳이에요\n• 첫 번째 밑줄\n• 두 번째 밑줄\n"
+                                            "• 첫 번째 밑줄\n• 두 번째 밑줄\n(총 4군데)")
+    press_label(env, "🧠 이 책에서 배우기")
+    assert "배워 볼까요" in env["api"].calls[-1]["text"]
+
+
+def test_underline_list_is_capped_at_ten(env):
+    env["ocr"]["body"] = " ".join(f"=={i}번==" for i in range(12))
+    set_book(env)
+    photo(env, "u1")
+    env["clock"].tick(seconds=91)
+    telegram_bot.flush_batch_notices(env["api"])
+    press_label(env, "📝 밑줄 보기")
+    t = env["api"].calls[-1]["text"]
+    assert t.count("• ") == 10 and t.endswith("(총 12군데)")
+
+
+def test_notify_ocr_done_and_owner_chat(env, monkeypatch):
+    text(env, "/help")  # first authorized message stores the owner's chat
+    assert S.ui_get("owner_chat") == CHAT
+    md = store.raw_dir("손자병법") / "tg-x-1.md"
+    store.write_md(md, {"book": "손자병법", "ocr": "done"}, "==하나== 그리고 ==둘==")
+    sent = []
+
+    class Rec(FakeAPI):
+        def __init__(self, token):
+            super().__init__()
+            sent.append(self)
+
+    monkeypatch.setattr(telegram_bot, "TelegramAPI", Rec)
+    telegram_bot.notify_ocr_done({"book": "손자병법", "file": "tg-x-1.jpg", "path": str(md)})
+    assert sent[0].calls[0]["text"] == "✍️ 《손자병법》 사진 1장을 Clair가 읽었어요 · 밑줄 2군데"
+    assert sent[0].calls[0]["chat"] == CHAT
+
+
+def test_notify_ocr_done_is_a_noop_without_token(env, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
+    config.get_settings.cache_clear()
+    S.ui_set("owner_chat", CHAT)
+    telegram_bot.notify_ocr_done({"book": "손자병법", "path": "nope.md"})  # no error, no call
+
+
+def test_cancelling_another_question_keeps_the_book_question_open(env):
+    set_book(env)
+    photo(env, "m1")
+    env["clock"].tick(seconds=200)
+    text(env, "사피엔스")  # book question: photos must wait
+    text(env, telegram_bot.MENU_MOVE)  # a move question with its own 취소
+    press_label(env, "취소")
+    assert intake.pending_choice() is not None
+    photo(env, "m2")
+    assert intake.holding_count() == 1 and intake.book_count("손자병법") == 1
+
+
+def test_intake_files_get_learn_grace(env):
+    set_book(env)
+    photo(env, "g1")
+    assert catalog.pending() == []
+    (held,) = catalog.pending(include_held=True)
+    assert held["held"] is True and held["book"] == "손자병법"

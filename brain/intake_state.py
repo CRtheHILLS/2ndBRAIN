@@ -27,10 +27,16 @@ MAX_BATCHES = 10
 MAX_SEEN = 500
 MAX_BUTTONS = 300
 MAX_ALBUMS = 20
+LEARN_GRACE = dt.timedelta(minutes=30)  # Telegram files wait this long before auto-classification
 
 
 def now_seoul() -> dt.datetime:
     return dt.datetime.now(SEOUL)
+
+
+def learn_hold_until() -> str:
+    """``catalog.register(hold_until=…)`` value: local naive ISO seconds, like ``catalog`` compares."""
+    return (dt.datetime.now() + LEARN_GRACE).isoformat(timespec="seconds")
 
 
 def iso(t: dt.datetime) -> str:
@@ -203,6 +209,14 @@ def parse_caption(caption: str) -> dict:
             "rest": "\n".join(lines[1:]), "note": "\n".join(lines)}
 
 
+_UNDERLINE = re.compile(r"==(.+?)==", re.S)
+
+
+def underlines(body: str) -> list[str]:
+    """``==밑줄==`` spans of an OCR body, ``==`` stripped, whitespace collapsed, blanks dropped."""
+    return [" ".join(m.split()) for m in _UNDERLINE.findall(body or "") if m.strip()]
+
+
 def ui_get(key: str, default=None):
     with LOCK:
         return load()["ui"].get(key, default)
@@ -277,7 +291,7 @@ def rehome(old: str, new_slug: str, f: dict, dst_dir: Path) -> None:
         forget_file(old, f["file"])
         new_md, new_img = dst_dir / f["md"], dst_dir / f["file"]
         if new_md.is_file():
-            catalog.register(new_slug, f["file"], new_md, f["sha256"])
+            catalog.register(new_slug, f["file"], new_md, f["sha256"], hold_until=learn_hold_until())
         ocr = ocr_module()
         if pend and ocr and getattr(ocr, "add_pending", None):
             ocr.add_pending({**pend, "id": catalog.make_id(new_slug, f["file"]), "book": new_slug,

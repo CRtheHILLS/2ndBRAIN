@@ -19,14 +19,14 @@ def env(data_dir, monkeypatch):
     ocr_state = {"value": "done"}
     calls = []
 
-    def fake_ingest(slug, filename, data, extra_meta=None):
+    def fake_ingest(slug, filename, data, extra_meta=None, hold_until=None):
         raw = store.raw_dir(slug)
         (raw / filename).write_bytes(data)
         out = raw / (Path(filename).stem + ".md")
         sha = hashlib.sha256(data).hexdigest()
         store.write_md(out, {"book": slug, "source": filename, "sha256": sha, "kind": "image",
                              "ocr": ocr_state["value"], **(extra_meta or {})}, "본문")
-        catalog.register(slug, filename, out, sha)
+        catalog.register(slug, filename, out, sha, hold_until=hold_until)
         calls.append((slug, filename, extra_meta))
         return out
 
@@ -251,7 +251,9 @@ def test_open_book_question_holds_photos_even_with_fresh_current(env):
     S.ui_set("pending_choice", {"at": S.iso(at(10)), "kind": "new"})
     r = intake.add_photo(img(1), "", "image/jpeg", now=at(20))
     assert r["status"] == "held" and env["calls"] == []
-    r = intake.add_photo(img(2), "", "image/jpeg", now=at(10 + 601))  # question older than 10 min
+    assert intake.add_photo(img(2), "", "image/jpeg", now=at(10 + 601))["status"] == "held"  # sticky
+    intake.discard_holding()
+    r = intake.add_photo(img(3), "", "image/jpeg", now=at(10 + 602))  # question older than 10 min
     assert r["status"] == "attached" and r["slug"] == "손자병법"
 
 
@@ -297,10 +299,10 @@ def test_resolve_holding_partial_failure_and_delete_after_save(env, monkeypatch)
     paths = [Path(h["path"]) for h in S.load()["holding"]]
     real_ingest, events = ingest.ingest_file, []
 
-    def flaky(slug, filename, data, extra_meta=None):
+    def flaky(slug, filename, data, extra_meta=None, hold_until=None):
         if data == img(2):
             raise OSError("ocr crashed")
-        return real_ingest(slug, filename, data, extra_meta)
+        return real_ingest(slug, filename, data, extra_meta, hold_until)
 
     real_save, real_unlink = S.save, Path.unlink
 
@@ -347,3 +349,40 @@ def test_live_button_keys_survive_trimming(env):
         st["batches"].append({"id": "b1", "kb": {"inline_keyboard": [[{"text": "ok", "callback_data": live}]]}})
     S.register_buttons([{"a": "x"}] * (S.MAX_BUTTONS + 50))
     assert S.button(live) == {"a": "ok", "batch": "b1", "g": 1}
+
+
+# --- T3c ------------------------------------------------------------------------
+
+def test_holding_is_sticky_but_caption_title_still_wins(env):
+    intake.add_photo(img(1), "", "image/jpeg", now=T0)  # no book -> holding
+    intake.set_current("손자병법", "손자병법", now=at(1))
+    assert intake.add_photo(img(2), "", "image/jpeg", now=at(2))["status"] == "held"
+    r = intake.add_photo(img(3), "", "image/jpeg", caption="창세기", now=at(3))
+    assert r["status"] == "attached" and r["slug"] == "창세기"  # an explicit book name is safe
+    assert intake.holding_count() == 2
+
+
+def test_purge_holding_warns_once_per_generation(env, monkeypatch):
+    from brain import telegram_bot
+    warned = []
+    monkeypatch.setattr(telegram_bot, "warn_holding_purge", warned.append)
+    intake.add_photo(img(1), "", "image/jpeg", now=T0)
+    intake.add_photo(img(2), "", "image/jpeg", now=T0 + dt.timedelta(hours=5))
+    assert intake.purge_holding(24, now=T0 + dt.timedelta(hours=23)) == 0
+    assert intake.purge_holding(24, now=T0 + dt.timedelta(hours=23, minutes=5)) == 0
+    assert warned == [1]
+    assert intake.purge_holding(24, now=T0 + dt.timedelta(hours=24)) == 1
+    assert intake.holding_count() == 1
+    assert intake.purge_holding(24, now=T0 + dt.timedelta(hours=28)) == 0
+    assert warned == [1, 1]  # the survivor gets its own warning
+    assert intake.purge_holding(24, now=T0 + dt.timedelta(hours=29)) == 1
+    assert intake.holding_count() == 0
+
+
+def test_batch_ocr_counts(env):
+    intake.set_current("손자병법", "손자병법", now=T0)
+    r = intake.add_photo(img(1), "", "image/jpeg", now=at(1))
+    env["ocr"]["value"] = "pending"
+    intake.add_photo(img(2), "", "image/jpeg", now=at(2))
+    assert intake.batch_ocr(r["batch_id"]) == {"done": 1, "pending": 1, "underlines": []}
+    assert intake.batch_ocr("nope") is None

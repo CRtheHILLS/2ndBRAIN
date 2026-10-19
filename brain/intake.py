@@ -22,7 +22,8 @@ from .slug import slugify
 EXPIRY = dt.timedelta(hours=6)
 BATCH_GAP = dt.timedelta(seconds=90)
 BATCH_MAX_AGE = dt.timedelta(minutes=10)
-LEARN_GRACE = dt.timedelta(minutes=30)
+LEARN_GRACE = S.LEARN_GRACE
+learn_hold_until = S.learn_hold_until
 CHOICE_TTL = dt.timedelta(minutes=10)  # an unanswered book question / title wait expires
 SUGGEST_RATIO = 0.8
 CAPTION_RATIO = 0.9
@@ -243,7 +244,7 @@ def _attach(st: dict, b: dict, data: bytes, ext: str, meta: dict, now: dt.dateti
         return None
     filename = f"tg-{b['id']}-{len(b['files']) + b['dupes'] + 1}{ext}"
     extra = {"via": "telegram", "batch": b["id"], "uploaded_at": S.iso(now), **meta}
-    md = ingest.ingest_file(b["slug"], filename, data, extra_meta=extra)
+    md = ingest.ingest_file(b["slug"], filename, data, extra_meta=extra, hold_until=learn_hold_until())
     ocr = _ocr_state(md)
     b["files"].append({"file": filename, "md": Path(md).name, "sha256": sha, "ocr": ocr})
     b["last_at"] = S.iso(now)
@@ -290,7 +291,8 @@ def add_photo(file_bytes: bytes, filename: str, mime: str, *, caption: str = "",
             book, meta = album["book"], album["meta"]
         via_current = False
         if book is None:
-            fresh = _fresh(st["current_book"], now) and not _choice_open(st, now)
+            # holding is sticky: once photos wait for a book, every new photo waits with them
+            fresh = _fresh(st["current_book"], now) and not _choice_open(st, now) and not st["holding"]
             cb = st["current_book"] if fresh else None
             if cb is None:
                 return _hold(st, file_bytes, ext, caption, media_group_id, meta, now)
@@ -313,10 +315,67 @@ def _hold(st, data, ext, caption, mgid, meta, now) -> dict:
                 "dupes": 1, "ocr": None}
     path = S.holding_dir() / f"{sha[:16]}{ext}"
     path.write_bytes(data)
+    if not st["holding"]:  # a new holding generation (one purge warning per generation)
+        st["holding_gen"] = st.get("holding_gen", 0) + 1
     st["holding"].append({"path": str(path), "ext": ext, "sha256": sha, "caption": caption or "",
                           "media_group_id": mgid, "meta": meta, "at": S.iso(now)})
     return {"status": "held", "batch_id": None, "slug": None, "count": len(st["holding"]),
             "dupes": 0, "ocr": None}
+
+
+def purge_holding(max_age_hours: int = 24, now: dt.datetime | None = None) -> int:
+    """Delete holding photos older than ``max_age_hours``; warn CR once an hour before.
+
+    The warning goes out once per holding generation, when the oldest photo is
+    ``max_age_hours - 1`` hours old.  Returns the number of photos deleted.
+    """
+    now = _now(now)
+    limit = dt.timedelta(hours=max_age_hours)
+    gone: list[dict] = []
+    warn = 0
+    with S.edit() as st:
+        keep = []
+        for h in st["holding"]:
+            (gone if now - S.parse(h["at"]) >= limit else keep).append(h)
+        st["holding"] = keep
+        if gone and keep:  # survivors get their own warning later
+            st["holding_gen"] = st.get("holding_gen", 0) + 1
+        if not keep:
+            st["ui"].pop("holding_msg", None)
+        soon = [h for h in keep if now - S.parse(h["at"]) >= limit - dt.timedelta(hours=1)]
+        if soon and st.get("holding_warned") != st.get("holding_gen"):
+            st["holding_warned"] = st.get("holding_gen")
+            warn = len(soon)
+    for h in gone:  # state no longer lists them
+        Path(h["path"]).unlink(missing_ok=True)
+    if warn:
+        try:
+            from . import telegram_bot  # noqa: PLC0415 - the bot imports intake
+            telegram_bot.warn_holding_purge(warn)
+        except Exception as e:  # noqa: BLE001 - purging must not fail because Telegram did
+            log.warning("보류함 정리 알림 실패: %s", e)
+    return len(gone)
+
+
+def batch_ocr(batch_id: str) -> dict | None:
+    """Read state of a batch from its md files: ``{"done", "pending", "underlines": [...]}``."""
+    b = get_batch(batch_id)
+    if b is None:
+        return None
+    d = get_settings().data_dir / "books" / b["slug"] / "raw"
+    done = pending = 0
+    marks: list[str] = []
+    for f in b["files"]:
+        try:
+            meta, body = store.read_md(d / f["md"])
+        except (OSError, ValueError):
+            continue
+        if meta.get("ocr") == "pending":
+            pending += 1
+        else:
+            done += 1
+            marks += S.underlines(body)
+    return {"done": done, "pending": pending, "underlines": marks}
 
 
 def holding_count() -> int:
@@ -508,7 +567,7 @@ def summary() -> dict:
              for b in store.list_books()]
     books.sort(key=lambda b: -b["count"])
     try:
-        unclassified = len(catalog.pending())
+        unclassified = len(catalog.pending(include_held=True))  # grace-period items wait too
     except Exception:  # noqa: BLE001
         unclassified = 0
     return {"books": books, "ocr_pending": ocr_pending_count(), "unclassified": unclassified,
