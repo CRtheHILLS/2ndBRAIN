@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 
 from . import catalog, index, ingest, store
+from . import marks as M
 from . import intake_state as S
 from .config import get_settings
 from .slug import slugify
@@ -374,7 +375,7 @@ def batch_ocr(batch_id: str) -> dict | None:
             pending += 1
         else:
             done += 1
-            marks += S.underlines(body)
+            marks += M.mark_lines(body)
     return {"done": done, "pending": pending, "underlines": marks}
 
 

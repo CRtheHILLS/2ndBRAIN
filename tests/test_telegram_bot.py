@@ -62,6 +62,11 @@ class Clock:
         self.t += dt.timedelta(**kw)
 
 
+def learn_on(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_LEARN_BUTTON", "true")
+    config.get_settings.cache_clear()
+
+
 @pytest.fixture
 def env(data_dir, monkeypatch):
     monkeypatch.setenv("TELEGRAM_ALLOWED_USER_ID", str(CR))
@@ -268,6 +273,17 @@ def test_ocr_pending_message(env):
     assert "📦" not in env["api"].calls[0]["text"]  # the reading result comes as its own notice
     env["clock"].tick(seconds=91)
     assert telegram_bot.flush_batch_notices(env["api"]) == 1
+    assert env["api"].calls[-1]["text"] == "📦 사진 1장 보관했어요. 글자와 밑줄·표시는 Clair가 읽을게요."
+
+
+def test_ocr_pending_message_auto_mode(env, monkeypatch):
+    monkeypatch.setenv("OCR_MODE", "auto")
+    config.get_settings.cache_clear()
+    env["ocr"]["value"] = "pending"
+    set_book(env)
+    photo(env, "f1")
+    env["clock"].tick(seconds=91)
+    telegram_bot.flush_batch_notices(env["api"])
     assert env["api"].calls[-1]["text"] == \
         "📦 사진은 안전하게 보관했어요. 글자는 Clair가 다음 세션에서 읽을게요. (읽기 대기 1장)"
 
@@ -396,6 +412,7 @@ def test_confirm_button_removes_buttons(env):
 # --- learn & status ----------------------------------------------------------------
 
 def test_learn_button_starts_quest_with_map_link(env, monkeypatch):
+    learn_on(monkeypatch)
     created, started = [], []
 
     def fake_create(sentence, days=None, level=None, started_by="cli"):
@@ -429,7 +446,26 @@ def test_start_shows_persistent_menu(env):
     kb = env["api"].calls[0]["markup"]
     assert kb["is_persistent"] and kb["resize_keyboard"]
     assert [b["text"] for row in kb["keyboard"] for b in row] == [
-        "📚 책 고르기", "📖 지금 책", "🔁 방금 묶음 옮기기", "🗑 방금 묶음 지우기", "🧠 이 책에서 배우기", "📊 서재 현황"]
+        "📚 책 고르기", "📖 지금 책", "🔁 방금 묶음 옮기기", "🗑 방금 묶음 지우기", "📊 서재 현황"]
+
+
+def test_menu_shows_learn_when_flag_on(env, monkeypatch):
+    learn_on(monkeypatch)
+    text(env, "/start")
+    assert "🧠 이 책에서 배우기" in [b["text"] for row in env["api"].calls[0]["markup"]["keyboard"] for b in row]
+
+
+def test_learn_hidden_reply_and_no_notice_button(env):
+    set_book(env)
+    photo(env, "h1")
+    text(env, "/learn")
+    assert env["api"].calls[-1]["text"] == "이 기능은 나중에 열어요. 지금은 사진 업로드만 해요."
+    text(env, telegram_bot.MENU_LEARN)
+    assert env["api"].calls[-1]["text"] == "이 기능은 나중에 열어요. 지금은 사진 업로드만 해요."
+    env["clock"].tick(seconds=91)
+    telegram_bot.flush_batch_notices(env["api"])
+    labels = [b["text"] for row in env["api"].calls[-1]["markup"]["inline_keyboard"] for b in row]
+    assert labels == ["📝 밑줄 보기"]
 
 
 def test_korean_particles():
@@ -461,7 +497,7 @@ def test_api_client_payloads_and_token_masking(env, caplog):
                     "allowed_updates": ["message", "callback_query"]}
     api.set_my_commands()
     names = [c["command"] for c in json.loads(cmds.calls[0].request.content)["commands"]]
-    assert names == ["start", "book", "now", "move", "undo", "learn", "status", "help"]
+    assert names == ["start", "book", "now", "move", "undo", "status", "help"]
     with caplog.at_level(logging.WARNING):
         assert api.send_message(1, "안녕") == {}
     assert TOKEN not in caplog.text and "***" in caplog.text
@@ -541,6 +577,7 @@ def test_duplicate_after_batch_window_opens_no_batch(env):
 
 
 def test_one_day_learn_sentence_differs(env, monkeypatch):
+    learn_on(monkeypatch)
     created = []
 
     def fake_create(s, days=None, level=None, started_by="cli"):
@@ -595,7 +632,8 @@ def test_purge_warning_once_then_purge(env, monkeypatch):
     assert S.ui_get("holding_msg") is None
 
 
-def test_ocr_done_notice_and_underlines(env):
+def test_ocr_done_notice_and_underlines(env, monkeypatch):
+    learn_on(monkeypatch)
     env["ocr"]["body"] = "앞 ==첫 번째 밑줄== 중간 ==두 번째\n밑줄== 끝"
     set_book(env)
     photo(env, "u1")
@@ -610,8 +648,8 @@ def test_ocr_done_notice_and_underlines(env):
     assert labels == ["📝 밑줄 보기", "🧠 이 책에서 배우기"]
     assert telegram_bot.flush_batch_notices(env["api"]) == 0  # reported once
     press_label(env, "📝 밑줄 보기")
-    assert env["api"].calls[-1]["text"] == ("📝 밑줄 친 곳이에요\n• 첫 번째 밑줄\n• 두 번째 밑줄\n"
-                                            "• 첫 번째 밑줄\n• 두 번째 밑줄\n(총 4군데)")
+    assert env["api"].calls[-1]["text"] == ("📝 밑줄 친 곳이에요\n• [밑줄] 첫 번째 밑줄\n• [밑줄] 두 번째 밑줄\n"
+                                            "• [밑줄] 첫 번째 밑줄\n• [밑줄] 두 번째 밑줄\n(총 4군데)")
     press_label(env, "🧠 이 책에서 배우기")
     assert "배워 볼까요" in env["api"].calls[-1]["text"]
 

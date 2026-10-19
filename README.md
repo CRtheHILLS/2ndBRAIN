@@ -79,6 +79,7 @@ brain-learn ask "질문"                  # 내 지식 창고에서 먼저 찾�
 `tasks`로 과제를 받아 직접 풀고 `submit`으로 돌려줘요. 세션이 끊겨도 서버가 30분마다 다시 시도해요.
 
 서버 환경변수: `GEMINI_API_KEY`, `XAI_API_KEY`(생각을 맡길 모델 키), `THINK_PROVIDERS`(쓸 순서, 예: `gemini,xai`).
+`OCR_MODE`(`clair` 기본: 텔레그램 사진은 Clair가 읽어요 / `auto`: 무료 모델이 먼저 읽어요), `TELEGRAM_LEARN_BUTTON`(`false` 기본: 🧠 배우기 버튼 숨김).
 
 ## 텔레그램으로 책 사진 보내기
 
