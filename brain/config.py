@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     quest_max_minutes: int = 30
     quest_quota_per_dot: int = 2
     canon_wikidata: bool = True
+    telegram_bot_token: str = ""
+    telegram_allowed_user_id: int = 0
+    telegram_webhook_secret: str = ""
+    brain_public_url: str = ""
+    ocr_daily_cap: int = 300
 
 
 @lru_cache

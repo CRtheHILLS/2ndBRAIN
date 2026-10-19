@@ -3,7 +3,7 @@ from io import BytesIO
 from pathlib import Path
 import pymupdf
 from PIL import Image
-from . import llm, store
+from . import catalog, llm, ocr, store  # noqa: F401  (llm kept: tests patch ingest.llm)
 
 fitz = pymupdf
 
@@ -11,15 +11,21 @@ IMG = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp"
        ".heic": "image/heic", ".heif": "image/heif"}
 HEIC_EXTS = {".heic", ".heif"}
 
-def _pdf_text(data: bytes) -> str:
-    out = []
+def _pdf_text(data: bytes) -> tuple[str, bool]:
+    """Return (text, ocr_incomplete). Pages that fail OCR get a placeholder comment."""
+    out, incomplete = [], False
     with fitz.open(stream=data, filetype="pdf") as doc:
         for i, page in enumerate(doc, 1):
             t = page.get_text().strip()
-            if not t:  # scanned page → OCR
-                t = llm.ocr_image(page.get_pixmap(dpi=150).tobytes("png"), "image/png")
+            if not t:  # scanned page -> OCR
+                try:
+                    t = ocr.ocr_image(page.get_pixmap(dpi=150).tobytes("png"), "image/png")
+                except ocr.OcrUnavailable:
+                    incomplete = True
+                    out.append(f"\n\n<!-- page {i}: ocr pending -->")
+                    continue
             out.append(f"\n\n<!-- page {i} -->\n{t}")
-    return "".join(out)
+    return "".join(out), incomplete
 
 def _to_jpeg(data: bytes, ext: str) -> bytes:
     """Convert image bytes (incl. HEIC/HEIF) to JPEG bytes for OCR."""
@@ -132,21 +138,39 @@ def _catalog_register(slug: str, filename: str, out: Path, sha: str) -> None:
         pass
 
 
-def ingest_file(slug: str, filename: str, data: bytes) -> Path:
+def ingest_file(slug: str, filename: str, data: bytes, extra_meta: dict | None = None) -> Path:
+    """Store the original, write the markdown. Never raises OcrUnavailable: the md is marked
+    ``ocr: pending`` and queued for Clair to transcribe."""
     filename = _sanitize_filename(filename)
     sha = hashlib.sha256(data).hexdigest()
     ext = Path(filename).suffix.lower()
     out = store.raw_dir(slug) / (Path(filename).stem + ".md")
+    prior: dict = {}
     if out.exists() and store.read_md(out)[0].get("sha256") == sha:
-        _catalog_register(slug, filename, out, sha)
-        return out
+        old = store.read_md(out)[0]
+        if old.get("ocr") != "pending":
+            _catalog_register(slug, filename, out, sha)
+            return out
+        eid = catalog.make_id(slug, filename)
+        if any(r["id"] == eid for r in ocr.list_pending()):
+            return out
+        prior = old  # pending md lost its queue entry: retry OCR and re-queue
     (store.raw_dir(slug) / filename).write_bytes(data)  # keep original, before any llm call
-    if ext in HEIC_EXTS:
-        kind, body = "image", llm.ocr_image(_to_jpeg(data, ext), "image/jpeg")
-    elif ext in IMG:
-        kind, body = "image", llm.ocr_image(data, IMG[ext])
+    ocr_state, pending_mime = "none", None
+    if ext in HEIC_EXTS or ext in IMG:
+        kind = "image"
+        jpeg = ext in HEIC_EXTS
+        mime = "image/jpeg" if jpeg else IMG[ext]
+        try:
+            body = ocr.ocr_image(_to_jpeg(data, ext) if jpeg else data, mime)
+            ocr_state = "done"
+        except ocr.OcrUnavailable:
+            body, ocr_state, pending_mime = "", "pending", IMG.get(ext, mime)
     elif ext == ".pdf":
-        kind, body = "pdf", _pdf_text(data)
+        kind = "pdf"
+        body, incomplete = _pdf_text(data)
+        ocr_state = "pending" if incomplete else "none"
+        pending_mime = "application/pdf"
     elif ext == ".xlsx":
         kind, body = "table", _xlsx_tables(data)
     elif ext == ".csv":
@@ -155,7 +179,14 @@ def ingest_file(slug: str, filename: str, data: bytes) -> Path:
         kind, body = "doc", _docx_body(data)
     else:
         kind, body = "text", _decode_text(data)
-    store.write_md(out, {"book": slug, "source": filename, "sha256": sha, "kind": kind,
-                         "ingested_at": dt.datetime.now().isoformat(timespec="seconds")}, body)
-    _catalog_register(slug, filename, out, sha)
+    core = {"book": slug, "source": filename, "sha256": sha, "kind": kind, "ocr": ocr_state,
+            "ingested_at": dt.datetime.now().isoformat(timespec="seconds")}
+    meta = {**prior, **(extra_meta or {}), **core}  # core keys always win
+    store.write_md(out, meta, body)
+    if ocr_state == "pending":
+        ocr.add_pending({"id": catalog.make_id(slug, filename), "book": slug, "file": filename,
+                         "path": str(out), "image": str(store.raw_dir(slug) / filename),
+                         "mime": pending_mime})
+    else:
+        _catalog_register(slug, filename, out, sha)
     return out
