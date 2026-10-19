@@ -52,6 +52,14 @@ def tick(now: dt.datetime | None = None) -> dict:
         except Exception:  # noqa: BLE001 - one bad quest must not stop the loop
             log.exception("scheduler: quest %s failed", slug)
             out["skipped"].append(f"{slug}: 오류")
+    out["holding_purged"] = 0
+    try:
+        from . import intake
+        purge = getattr(intake, "purge_holding", None)
+        if purge:
+            out["holding_purged"] = int(purge(24) or 0)
+    except Exception:  # noqa: BLE001 - housekeeping must not break the retry loop
+        log.exception("scheduler: purge_holding failed")
     return out
 
 

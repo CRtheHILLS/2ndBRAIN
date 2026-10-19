@@ -12,7 +12,10 @@ from fastapi.responses import Response, RedirectResponse, PlainTextResponse, HTM
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from brain import store, ingest, distill, render, index, levels, catalog, think, graph, quest, scheduler
-from brain import retrieve, ocr
+from brain import retrieve, ocr, telegram_worker, telegram_bot
+import logging
+
+log = logging.getLogger(__name__)
 from brain import ask as ask_mod, vault_export
 from brain.config import get_settings
 from brain.ingest import _sanitize_filename
@@ -508,9 +511,17 @@ async def lifespan(app: FastAPI):
     except Exception: pass  # never block startup
     app.mount("/site", StaticFiles(directory=store.site_dir(), html=True), name="site")
     scheduler.start()
+    cfg = get_settings()
+    if cfg.telegram_bot_token and cfg.brain_public_url:
+        telegram_worker.start()
+        try:
+            _telegram_setup()
+        except Exception as e:  # noqa: BLE001 - never block startup
+            log.warning("텔레그램 웹훅 자동 설정 실패: %s", str(e).replace(cfg.telegram_bot_token, "***"))
     try:
         yield
     finally:
+        telegram_worker.stop()
         scheduler.stop()
 
 
@@ -527,6 +538,42 @@ async def _no_index_headers(request: Request, call_next):
 def require_token(x_brain_token: str = Header(default="")):
     if not secrets.compare_digest(x_brain_token.encode("utf-8"), get_settings().brain_token.encode("utf-8")):
         raise HTTPException(401, "bad token")
+
+
+# --- telegram -----------------------------------------------------------------
+
+def _telegram_setup() -> dict:
+    s = get_settings()
+    if not s.telegram_bot_token:
+        raise HTTPException(400, "텔레그램 봇 토큰이 설정되지 않았어요")
+    if not s.brain_public_url:
+        raise HTTPException(400, "서버 공개 주소(BRAIN_PUBLIC_URL)가 설정되지 않았어요")
+    tg = telegram_bot.TelegramAPI(s.telegram_bot_token)
+    url = f"{s.brain_public_url.rstrip('/')}/telegram/webhook"
+    return {"webhook": tg.set_webhook(url, s.telegram_webhook_secret), "commands": tg.set_my_commands()}
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request,
+                           x_telegram_bot_api_secret_token: str = Header(default="")):
+    s = get_settings()
+    if not s.telegram_bot_token:
+        raise HTTPException(404, "텔레그램 봇이 켜져 있지 않아요")
+    if not s.telegram_webhook_secret or not secrets.compare_digest(
+            x_telegram_bot_api_secret_token.encode("utf-8"), s.telegram_webhook_secret.encode("utf-8")):
+        raise HTTPException(403, "비밀 토큰이 맞지 않아요")
+    try:
+        update = await request.json()
+    except ValueError:
+        raise HTTPException(400, "JSON 형식이 아니에요") from None
+    if isinstance(update, dict):
+        telegram_worker.enqueue(update)
+    return {"ok": True}
+
+
+@app.post("/telegram/setup", dependencies=[Depends(require_token)])
+def telegram_setup():
+    return _telegram_setup()
 
 
 @app.get("/health")
