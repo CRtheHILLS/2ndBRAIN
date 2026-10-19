@@ -190,3 +190,45 @@ def test_start_without_level_lets_server_read_sentence_and_url_fallback(monkeypa
     out = capsys.readouterr().out
     assert code == 0 and calls[0][4] == {"sentence": "헬리콥터 전문가 수준으로 배우고 싶어"}
     assert "http://x/site/quests/heli/index.html" in out
+
+
+def test_ocr_list_prints_table(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(learn_cli, "fetch_json", _fake(calls, {("GET", "/ocr/pending"): [
+        {"id": "abc123456789xyz", "book": "책", "file": "p.jpg", "added_at": "2026-10-19T10:00:00"}]}))
+    assert learn_cli.main(BASE + ["ocr", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "abc123456789" in out and "p.jpg" in out
+
+
+def test_ocr_get_saves_image_and_placeholder(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(learn_cli, "fetch_json", _fake(calls, {("GET", "/ocr/pending"): [
+        {"id": "abc123", "book": "책", "file": "p.jpg", "mime": "image/jpeg"}]}))
+    monkeypatch.setattr(learn_cli, "fetch_bytes", lambda path, **kw: b"IMG")
+    assert learn_cli.main(BASE + ["ocr", "get", "abc", "--out", str(tmp_path)]) == 0
+    assert (tmp_path / "abc123.jpg").read_bytes() == b"IMG"
+    assert "brain-learn ocr submit abc123" in (tmp_path / "abc123.txt").read_text("utf-8")
+    skeleton = (tmp_path / "abc123.txt").read_text("utf-8")
+    assert all(h in skeleton for h in ("## 표시 목록", "## 독자 메모", "## 쪽수"))
+
+
+def test_ocr_submit_posts_text(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(learn_cli, "fetch_json", _fake(calls, {
+        ("GET", "/ocr/pending"): [{"id": "abc123", "book": "책", "file": "p.jpg"}],
+        ("POST", "/ocr/abc123"): {"book": "책", "file": "p.jpg", "ocr": "done"}}))
+    f = tmp_path / "t.txt"
+    f.write_text("읽은 글", "utf-8")
+    assert learn_cli.main(BASE + ["ocr", "submit", "abc123", str(f)]) == 0
+    assert calls[-1][:2] == ("POST", "/ocr/abc123") and calls[-1][4] == {"text": "읽은 글"}
+
+
+def test_ocr_submit_refuses_skeleton(monkeypatch, tmp_path, capsys):
+    calls = []
+    monkeypatch.setattr(learn_cli, "fetch_json", _fake(calls, {}))
+    f = tmp_path / "x.txt"
+    f.write_text("<!-- 여기에 -->\n## 표시 목록\n- 없음\n", "utf-8")
+    assert learn_cli.main(BASE + ["ocr", "submit", "abc", str(f)]) == 2
+    assert not calls
+    assert "비어 있어요" in capsys.readouterr().err

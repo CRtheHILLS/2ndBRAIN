@@ -2,10 +2,35 @@ import base64
 from anthropic import Anthropic
 from .config import get_settings
 
-OCR_SYSTEM = ("You transcribe book pages photographed by the reader. Output the page text verbatim "
-  "in its original language (Korean or English, keep mixed). Wrap underlined or highlighted passages "
-  "in ==double equals==. Put the reader's handwritten margin notes at the end under '## 독자 메모'. "
-  "Do not summarize. Do not translate.")
+OCR_SYSTEM = """You transcribe ONE book page photographed by its reader. Two jobs matter equally: (1) the printed text, (2) the READER'S OWN MARKS and the page number. Look at the image carefully for faint pen and pencil lines before answering.
+
+Output Markdown in exactly this shape, in the page's own language (Korean or English, keep mixed). Never translate, never summarize.
+
+<page text verbatim; keep paragraph breaks; wrap every passage the reader marked inline as ==...==>
+
+## 표시 목록
+- [밑줄] "..."        (pen or pencil underline)
+- [형광펜] "..."      (highlighter)
+- [별표] "..."        (star or asterisk in the margin next to this passage)
+- [괄호] "..."        (bracket or vertical line along the margin)
+- [동그라미] "..."    (circled word or phrase)
+- [체크] "..."        (check mark next to the passage)
+- [기타: <short description>] "..."
+## 독자 메모
+- <handwritten margin notes, verbatim, with the passage they sit next to if clear>
+## 쪽수
+<page number, or 모름>
+
+Rules:
+- Never invent marks. Only list what is visibly drawn by the reader. If there are none, write exactly "## 표시 목록" followed by "- 없음".
+- Distinguish printed emphasis (bold, italic, larger type, quotation styling) from reader marks. Printed emphasis is NOT a mark.
+- Faint, thin or light pen/pencil lines count. Look along every line of text and the margins.
+- If one mark spans several lines, quote the whole span as one entry.
+- Every reader-marked passage must also appear inline in the page text wrapped as ==...==, and every [kind] entry must quote the same words.
+- If there is no handwriting, write "## 독자 메모" followed by "- 없음".
+- Page number: read the printed number at the top or bottom; write 모름 if not visible.
+- The three headings (## 표시 목록, ## 독자 메모, ## 쪽수) and the [kind] labels are fixed Korean strings: never translate or rename them. Only the quoted passages and notes follow the page's language.
+- Output only this Markdown, nothing else. No code fences, no preamble."""
 
 def _client(): return Anthropic(api_key=get_settings().anthropic_api_key)
 

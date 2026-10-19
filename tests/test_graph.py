@@ -210,3 +210,66 @@ def test_db_schema_runs_once_per_path(data_dir, monkeypatch):
     for _ in range(3):
         db.connect().close()
     assert calls == []
+
+
+def test_remove_node_tombstone_and_rebuild(data_dir):
+    graph.upsert_node("a", "concept", "에이")
+    graph.upsert_node("b", "concept", "비")
+    graph.upsert_node("c", "concept", "씨")
+    graph.add_edge("a", "b", "related")
+    graph.add_edge("c", "a", "related")
+    graph.add_alias("에이별칭", "a")
+    before_events = len(_events(data_dir))
+    assert graph.remove_node("a") is True
+    assert len(_events(data_dir)) == before_events + 1 and _events(data_dir)[-1]["op"] == "remove"
+    assert graph.get_node("a") is None and graph.find_alias("에이별칭") is None
+    assert graph.neighbors("b")["edges"] == [] and graph.neighbors("c")["edges"] == []
+    stats_before = graph.stats()
+    graph.rebuild()
+    assert graph.get_node("a") is None and graph.find_alias("에이별칭") is None
+    assert graph.stats() == stats_before
+
+
+def test_remove_node_missing_returns_false(data_dir):
+    assert graph.remove_node("ghost") is False
+
+
+def test_edge_to_removed_node_dropped_live_and_on_rebuild(data_dir):
+    graph.upsert_node("a", "concept", "에이")
+    graph.upsert_node("b", "concept", "비")
+    graph.add_edge("a", "b", "related")
+    graph.remove_node("b")
+    graph.add_edge("a", "b", "related")
+    graph.add_alias("비별칭", "b")
+    assert graph.neighbors("a")["edges"] == []
+    stats_before = graph.stats()
+    graph.rebuild()
+    assert graph.neighbors("a")["edges"] == [] and graph.stats() == stats_before
+
+
+def test_remove_node_via_redirected_id(data_dir):
+    graph.upsert_node("new", "concept", "새")
+    graph.redirect("old", "new")
+    assert graph.remove_node("old") is True
+    assert graph.get_node("new") is None and graph.get_node("old") is None
+    assert graph.resolve("old") == "old"
+    graph.rebuild()
+    assert graph.get_node("new") is None and graph.resolve("old") == "old"
+
+
+def test_reupsert_after_remove_revives_node(data_dir):
+    graph.upsert_node("a", "concept", "에이")
+    graph.upsert_node("b", "concept", "비")
+    graph.remove_node("b")
+    graph.upsert_node("b", "concept", "비")
+    graph.add_edge("a", "b", "related")
+    assert len(graph.neighbors("a")["edges"]) == 1
+    graph.rebuild()
+    assert len(graph.neighbors("a")["edges"]) == 1
+
+
+def test_edge_to_pseudo_book_node_still_kept(data_dir):
+    graph.upsert_node("a", "concept", "에이")
+    graph.add_edge("a", "book:x", "in_book")
+    graph.rebuild()
+    assert len(graph.neighbors("a")["edges"]) == 1

@@ -139,7 +139,7 @@ def daily_count() -> int:
         if not line.strip():
             continue
         try:
-            if json.loads(line).get("kind") == "search":
+            if json.loads(line).get("kind") in ("search", "ocr"):
                 continue
         except (ValueError, AttributeError):
             pass

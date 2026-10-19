@@ -49,10 +49,18 @@ def append_event(ev: dict) -> dict:
     return ev
 
 
+def _touches_removed(ev: dict, con) -> bool:
+    """Alias/tag/edge events naming a tombstoned node are dropped (a tombstone stays final
+    until the node is explicitly upserted again). Pseudo-nodes like ``book:x`` are never removed."""
+    ids = (ev["src"], ev["dst"]) if ev["op"] == "edge" else (ev["node_id"],)
+    return any(con.execute("SELECT 1 FROM removed WHERE id=?", (i,)).fetchone() for i in ids)
+
+
 def _apply(ev: dict, con) -> None:
     """Apply one event to the tables (shared by live writes and rebuild)."""
     op, t = ev["op"], ev["t"]
     if op == "node":
+        con.execute("DELETE FROM removed WHERE id=?", (ev["id"],))
         row = con.execute("SELECT kind, label_ko, label_en, wikidata, field_code, summary "
                           "FROM nodes WHERE id=?", (ev["id"],)).fetchone()
         new = [ev.get(k, "") or "" for k in ("kind", "label_ko", "label_en", "wikidata",
@@ -65,6 +73,8 @@ def _apply(ev: dict, con) -> None:
                 merged[4] = row[4]
             con.execute("UPDATE nodes SET kind=?, label_ko=?, label_en=?, wikidata=?, "
                         "field_code=?, summary=?, updated_at=? WHERE id=?", (*merged, t, ev["id"]))
+    elif op in ("alias", "tag", "edge") and _touches_removed(ev, con):
+        log.debug("graph: dropping %s event for a removed node: %s", op, ev)
     elif op == "alias":
         con.execute("INSERT OR IGNORE INTO aliases VALUES (?,?)", (_norm(ev["alias"]), ev["node_id"]))
     elif op == "tag":
@@ -81,6 +91,14 @@ def _apply(ev: dict, con) -> None:
                      ev.get("evidence", ""), created))
     elif op == "redirect":
         con.execute("INSERT OR REPLACE INTO redirects VALUES (?,?)", (ev["old_id"], ev["new_id"]))
+    elif op == "remove":
+        i = ev["id"]
+        con.execute("DELETE FROM nodes WHERE id=?", (i,))
+        con.execute("DELETE FROM edges WHERE src=? OR dst=?", (i, i))
+        con.execute("DELETE FROM aliases WHERE node_id=?", (i,))
+        con.execute("DELETE FROM node_tags WHERE node_id=?", (i,))
+        con.execute("DELETE FROM redirects WHERE new_id=? OR old_id=?", (i, i))
+        con.execute("INSERT OR IGNORE INTO removed VALUES (?)", (i,))
 
 
 def _write(*events: dict) -> None:
@@ -109,6 +127,16 @@ def upsert_node(id: str, kind: str, label_ko: str, label_en: str = "", wikidata:
     evs += [{"op": "tag", "node_id": id, "tag": t} for t in tags if t]
     _write(*evs)
     return get_node(id)
+
+
+def remove_node(node_id: str) -> bool:
+    """Tombstone a node: log a ``remove`` event and drop its rows (log stays append-only)."""
+    with closing(db.connect()) as con:
+        rid = _resolve(con, node_id)
+        if _node(con, rid) is None:
+            return False
+    _write({"op": "remove", "id": rid})
+    return True
 
 
 def _alias_taken(alias: str, node_id: str) -> bool:
@@ -295,7 +323,7 @@ def rebuild() -> int:
     path = _log_path()
     n = 0
     with closing(db.connect()) as con, con:
-        for t in ("nodes", "aliases", "node_tags", "edges", "redirects"):
+        for t in ("nodes", "aliases", "node_tags", "edges", "redirects", "removed"):
             con.execute(f"DELETE FROM {t}")
         if path.exists():
             for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
