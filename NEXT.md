@@ -1,8 +1,8 @@
 # NEXT.md — 2nd BRAIN (Clair)
 
 ## 2026-10-19 내일 제일 먼저 — 마지막 수정 묶음 병합·배포 (CR 지시: 테스트는 내일)
-- [x] 수정 묶음은 `feat/learn-quest`에 병합됨(adcb934). 마지막 재검토(opus)도 '전부 해결, 새 문제 없음'으로 끝남. **내일 첫 명령:** `.venv/Scripts/python -m pytest -q` (420개 예상)
-- [ ] 통과하면 `git checkout main && git merge --no-ff feat/learn-quest` → `pip install -e .`(brain-sync/brain-learn 명령 복구) → `railway up`
+- [x] (2026-10-19) 전체 테스트 420개 통과 → `main`에 병합(c16061d) → `pip install -e .`로 `brain-sync`/`brain-learn` 명령 복구
+- [ ] (2026-10-19 진행 중) main에서 `railway up` → 아래 확인 항목
 - [ ] 배포 후 확인: `GET /vault.zip`(지금 배포본은 500 — 수정 묶음에 고침 포함), `python -m sync.learn_cli ask "창세기 첫째 날의 빛이 태양보다 먼저인 건 과학적으로?"`(수정 전엔 수업 내용을 못 찾음), `/search`는 이제 토큰 필요, 그래프 페이지 토큰은 `#t=`로 바뀜
 - [ ] 재검토는 깨끗했지만 아래 다섯 우려는 운영하며 지켜볼 것 → 필요하면 `.superpowers/sdd/2026-10-18-learn-quest/final-fix-report.md`를 읽고, 의심되면 `tests/` 전체 + 아래 다섯 우려를 눈으로 확인: ① `_thin` 규칙이 벡터 꺼진 상태에서 웹을 자주 부름 ② `xai_search.CURRENT_LOG` 전역(퀘스트 2개 동시 수집 시 로그 섞임) ③ 검색 사용량은 일일 상한에서 제외(비용 추정엔 포함) ④ vec 확장은 연결마다 load ⑤ 2글자 검색은 LIKE 전체 스캔
 - [ ] 진행 장부: `.superpowers/sdd/2026-10-18-learn-quest/progress.md` (모든 결정·보류 항목). 워크트리 `.claude/worktrees/agent-a00fdbafac0816606`는 병합 후 `git worktree remove --force`
@@ -15,7 +15,7 @@
 - [ ] **분류 백로그 958건** (비숑 272·손자병법 300·장수마을 138·인간관계론 154·THE-MIND 86…): `POST /catalog/learn?limit=25&book=<책>` 반복. Gemini 무료 한도·일일 상한(THINK_DAILY_CAP=200) 안에서 하루 2~3권씩. 분류될수록 다리(bridge)가 저절로 늘어남
 - [ ] **두뇌 그래프 링크 CR에게 주기:** `/site/brain/index.html#t=<BRAIN_TOKEN>` (한 번 열면 브라우저에 저장, `#` 뒤라 서버 기록에 안 남음). Obsidian: `GET /vault.zip` (토큰) → 압축 풀고 Obsidian에서 폴더 열기
 - [ ] Railway `railway.json` config-as-code 2026-12-01까지 마이그레이션(`railway config migrate`)
-- [ ] 로컬: `pip install -e .`를 다시 해 두었음(`brain-sync`, `brain-learn` 명령 사용 가능). 깃 `main`에 병합했으나 **origin에 push는 안 함**(CR 결정 필요)
+- [ ] 깃 `main`에 병합 완료, **origin에 push는 안 함**(CR 결정 필요: `git push origin main feat/learn-quest`)
 - 사용법 요약: 한 문장("…배우고 싶어") → Clair가 `/learn` 스킬 → `python -m sync.learn_cli start/watch`. 생각 담당(모델) 전부 실패 시 서버가 30분마다 재시도, 세션이 있으면 Clair가 과제를 직접 풀어 `submit`. README "학습 퀘스트" 절 참고
 
 ## 2026-10-11 NotebookLM 5권 추출 → 볼륨 업로드 완료 (로컬도 보관, CR 결정)
