@@ -48,3 +48,6 @@ LEARN start "<CR의 문장 그대로>" [--days N] [--level 초등|일반|전문]
 ## 5. 실패(종료 코드 1)
 사유를 그대로 알려 주고 `LEARN resume <slug>`로 다시 시작해요. 같은 이유로 또 실패하면
 이유와 함께 CR에게 어떻게 할지 물어요.
+
+## 비용 원칙 (2026-10-19)
+당분간 유료 API를 쓰지 않아요. 서버는 Gemini 무료 등급만 시도하고, 막히면 `waiting_thinker`가 돼요. 그러면 기다리지 말고 바로 위의 "생각 담당" 절차로 Clair가 직접 풀어요. plan·teach·bridge 과제는 opus 심부름꾼 1명씩, classify는 sonnet 묶음이에요.
