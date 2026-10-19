@@ -4,6 +4,7 @@ Everything here is side-effect free so it is easy to test; ``telegram_bot`` does
 """
 
 from . import intake_state as S
+from .config import get_settings
 
 MENU_BOOK, MENU_NOW, MENU_MOVE = "📚 책 고르기", "📖 지금 책", "🔁 방금 묶음 옮기기"
 MENU_DELETE, MENU_LEARN, MENU_STATUS = "🗑 방금 묶음 지우기", "🧠 이 책에서 배우기", "📊 서재 현황"
@@ -24,7 +25,8 @@ MAX_UNDERLINES = 10
 class keyboards:  # noqa: N801 - a namespace of pure functions
     @staticmethod
     def main_menu() -> dict:
-        return {"keyboard": [[{"text": t} for t in row] for row in MENU],
+        rows = [[t for t in row if t != MENU_LEARN or get_settings().telegram_learn_button] for row in MENU]
+        return {"keyboard": [[{"text": t} for t in row] for row in rows if row],
                 "resize_keyboard": True, "is_persistent": True}
 
     @staticmethod
@@ -106,7 +108,17 @@ def text_ocr_done(done: int, marks: int) -> str:
     return f"✍️ {done}장 읽었어요 · 밑줄 {marks}군데"
 
 
-def text_ocr_pending(waiting: int) -> str:
+LEARN_HIDDEN = "이 기능은 나중에 열어요. 지금은 사진 업로드만 해요."
+
+
+def commands() -> list[tuple[str, str]]:
+    on = get_settings().telegram_learn_button
+    return [c for c in COMMANDS if on or c[0] != "learn"]
+
+
+def text_ocr_pending(waiting: int, n: int = 1) -> str:
+    if get_settings().ocr_mode == "clair":
+        return f"📦 사진 {n}장 보관했어요. 글자와 밑줄·표시는 Clair가 읽을게요."
     return f"📦 사진은 안전하게 보관했어요. 글자는 Clair가 다음 세션에서 읽을게요. (읽기 대기 {waiting}장)"
 
 
@@ -116,7 +128,7 @@ def text_ocr_notice(done: int, marks: int, pending: int, waiting: int) -> list[s
     if done:
         out.append(text_ocr_done(done, marks))
     if pending:
-        out.append(text_ocr_pending(max(waiting, pending)))
+        out.append(text_ocr_pending(max(waiting, pending), pending))
     return out
 
 

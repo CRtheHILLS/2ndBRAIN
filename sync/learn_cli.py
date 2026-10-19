@@ -318,6 +318,18 @@ def _resolve_ocr_id(ctx, prefix):
     return hits[0]
 
 
+OCR_SKELETON = """<!-- 이 칸에 쪽 글자를 그대로 적어요. 독자가 표시한 곳은 ==...== 로 감싸요. 이 안내 줄은 지워도 돼요.
+     다 쓰면 `brain-learn ocr submit {id} {name}` 로 제출해요. 자세한 규칙은 /read-page 스킬. -->
+
+## 표시 목록
+- 없음
+## 독자 메모
+- 없음
+## 쪽수
+모름
+"""
+
+
 def cmd_ocr_get(ctx, ns):
     entry = _resolve_ocr_id(ctx, ns.id)
     content = fetch_bytes(f"/ocr/file/{entry['id']}", url=ctx.url, token=ctx.token)
@@ -327,8 +339,7 @@ def cmd_ocr_get(ctx, ns):
     img = out / f"{entry['id']}{ext}"
     img.write_bytes(content)
     txt = out / f"{entry['id']}.txt"
-    txt.write_text(f"(이 파일에 읽은 글자를 적고 `brain-learn ocr submit {entry['id']} {txt.name}`로 제출해요. "
-                   "이 안내 줄은 지워도 돼요.)\n", encoding="utf-8")
+    txt.write_text(OCR_SKELETON.format(id=entry["id"], name=txt.name), encoding="utf-8")
     print(f"저장했어요: {img}\n글자를 적을 파일: {txt}")
     return 0
 

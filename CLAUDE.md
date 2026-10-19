@@ -6,7 +6,7 @@ CR에게 보이는 말은 전부 한국어로 해요.
 ## 1. 세션을 시작할 때
 1. `NEXT.md`를 읽어요.
 2. `.venv/Scripts/python -m sync.learn_cli list`로 진행 중·대기 중인 학습 퀘스트를 확인해요.
-3. 텔레그램 OCR 대기(`brain-learn ocr list`)가 있으면 Clair가 읽어서 `ocr submit`을 해요.
+3. 텔레그램 OCR 대기(`brain-learn ocr list`)가 있으면 Clair가 읽어서 `ocr submit`을 해요. 대기가 있으면 `/read-page` 스킬로 처리해요(밑줄·표시·쪽수까지).
 4. 위 내용을 합쳐서 CR에게 먼저 짧게 보고해요. 작업은 그다음이에요.
    - `waiting_thinker` 퀘스트가 있으면 `/learn` 스킬의 "생각 담당" 절차로 바로 이어서 풀어요.
 

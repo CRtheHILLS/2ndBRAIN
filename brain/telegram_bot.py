@@ -14,10 +14,11 @@ from pathlib import Path, PurePosixPath
 import httpx
 
 from . import intake, quest, store
+from .marks import count_marks
 from . import intake_state as S
 from .config import get_settings
 from .telegram_ui import (  # noqa: F401 - re-exported for callers and tests
-    COMMANDS, EXPIRED, MENU, MENU_BOOK, MENU_DELETE, MENU_LEARN, MENU_MOVE, MENU_NOW, MENU_STATUS,
+    EXPIRED, LEARN_HIDDEN, commands, MENU, MENU_BOOK, MENU_DELETE, MENU_LEARN, MENU_MOVE, MENU_NOW, MENU_STATUS,
     _book, _ieot, _ro, _short, keyboards, text_batch, text_book_set, text_clair_read, text_help,
     text_holding, text_holding_warning, text_ocr_notice, text_underlines, underlines,
 )
@@ -93,7 +94,7 @@ class TelegramAPI:
 
     def set_my_commands(self) -> dict:
         return self._call("setMyCommands",
-                          {"commands": [{"command": c, "description": d} for c, d in COMMANDS]})
+                          {"commands": [{"command": c, "description": d} for c, d in commands()]})
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +373,9 @@ def _menu_now(api, chat) -> None:
 
 
 def _menu_learn(api, chat) -> None:
+    if not get_settings().telegram_learn_button:
+        api.send_message(chat, LEARN_HIDDEN)
+        return
     cur = intake.current()
     if cur:
         _learn_confirm(api, chat, None, cur["slug"], cur["title"])
@@ -514,8 +518,10 @@ def flush_batch_notices(api, now=None) -> int:
             msgs = text_ocr_notice(stats["done"], len(stats["underlines"]), stats["pending"],
                                    intake.ocr_pending_count())
             if stats["done"]:
-                rows = [[("📝 밑줄 보기", {"a": "ul", "batch": b["id"]}),
-                         ("🧠 이 책에서 배우기", {"a": "learnask", "slug": b["slug"], "title": b["title"]})]]
+                rows = [[("📝 밑줄 보기", {"a": "ul", "batch": b["id"]})]]
+                if get_settings().telegram_learn_button:
+                    rows[0].append(("🧠 이 책에서 배우기",
+                                    {"a": "learnask", "slug": b["slug"], "title": b["title"]}))
                 api.send_message(chat, msgs.pop(0), _kb(rows))
             for m in msgs:
                 api.send_message(chat, m)
@@ -538,7 +544,7 @@ def notify_ocr_done(entry: dict) -> None:
         md = Path(entry.get("path") or "")
         body = store.read_md(md)[1] if md.is_file() else ""
         api.send_message(chat, text_clair_read(intake.book_title(entry.get("book") or ""),
-                                               len(underlines(body))))
+                                               count_marks(body)))
     except Exception as e:  # noqa: BLE001
         log.warning("읽기 완료 알림 실패: %s", e)
 

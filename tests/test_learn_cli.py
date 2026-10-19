@@ -209,6 +209,8 @@ def test_ocr_get_saves_image_and_placeholder(monkeypatch, tmp_path):
     assert learn_cli.main(BASE + ["ocr", "get", "abc", "--out", str(tmp_path)]) == 0
     assert (tmp_path / "abc123.jpg").read_bytes() == b"IMG"
     assert "brain-learn ocr submit abc123" in (tmp_path / "abc123.txt").read_text("utf-8")
+    skeleton = (tmp_path / "abc123.txt").read_text("utf-8")
+    assert all(h in skeleton for h in ("## 표시 목록", "## 독자 메모", "## 쪽수"))
 
 
 def test_ocr_submit_posts_text(monkeypatch, tmp_path):

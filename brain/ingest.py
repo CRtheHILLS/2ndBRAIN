@@ -3,6 +3,7 @@ from io import BytesIO
 from pathlib import Path
 import pymupdf
 from PIL import Image
+from .config import get_settings
 from . import catalog, llm, ocr, store  # noqa: F401  (llm kept: tests patch ingest.llm)
 
 fitz = pymupdf
@@ -164,6 +165,8 @@ def ingest_file(slug: str, filename: str, data: bytes, extra_meta: dict | None =
         jpeg = ext in HEIC_EXTS
         mime = "image/jpeg" if jpeg else IMG[ext]
         try:
+            if (extra_meta or {}).get("via") == "telegram" and get_settings().ocr_mode == "clair":
+                raise ocr.OcrUnavailable(["clair-first"])  # Clair reads Telegram photos herself
             body = ocr.ocr_image(_to_jpeg(data, ext) if jpeg else data, mime)
             ocr_state = "done"
         except ocr.OcrUnavailable:
