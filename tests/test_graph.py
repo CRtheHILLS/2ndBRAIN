@@ -210,3 +210,25 @@ def test_db_schema_runs_once_per_path(data_dir, monkeypatch):
     for _ in range(3):
         db.connect().close()
     assert calls == []
+
+
+def test_remove_node_tombstone_and_rebuild(data_dir):
+    graph.upsert_node("a", "concept", "에이")
+    graph.upsert_node("b", "concept", "비")
+    graph.upsert_node("c", "concept", "씨")
+    graph.add_edge("a", "b", "related")
+    graph.add_edge("c", "a", "related")
+    graph.add_alias("에이별칭", "a")
+    before_events = len(_events(data_dir))
+    assert graph.remove_node("a") is True
+    assert len(_events(data_dir)) == before_events + 1 and _events(data_dir)[-1]["op"] == "remove"
+    assert graph.get_node("a") is None and graph.find_alias("에이별칭") is None
+    assert graph.neighbors("b")["edges"] == [] and graph.neighbors("c")["edges"] == []
+    stats_before = graph.stats()
+    graph.rebuild()
+    assert graph.get_node("a") is None and graph.find_alias("에이별칭") is None
+    assert graph.stats() == stats_before
+
+
+def test_remove_node_missing_returns_false(data_dir):
+    assert graph.remove_node("ghost") is False

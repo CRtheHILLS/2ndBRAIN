@@ -468,3 +468,32 @@ def test_catalog_card_summary_and_domain_have_defaults():
     from brain import models
     c = models.CatalogCard(index=1, title="제목")
     assert c.summary == "" and c.domain == "기타"
+
+
+def test_pending_excludes_future_hold_until_and_includes_past(data_dir):
+    import datetime as dt
+    fut = (dt.datetime.now() + dt.timedelta(minutes=30)).isoformat(timespec="seconds")
+    past = (dt.datetime.now() - dt.timedelta(minutes=1)).isoformat(timespec="seconds")
+    catalog.register("b", "held.md", data_dir / "x.md", "s1", hold_until=fut)
+    catalog.register("b", "past.md", data_dir / "y.md", "s2", hold_until=past)
+    catalog.register("b", "none.md", data_dir / "z.md", "s3")
+    assert {i["file"] for i in catalog.pending()} == {"past.md", "none.md"}
+    allp = {i["file"]: i for i in catalog.pending(include_held=True)}
+    assert set(allp) == {"held.md", "past.md", "none.md"} and allp["held.md"]["held"] is True
+
+
+def test_forget_removes_queue_entry_card_and_graph_node(data_dir, monkeypatch):
+    from brain import graph
+    item = catalog.register("b", "a.md", data_dir / "a.md", "s1")
+    catalog.register("b", "keep.md", data_dir / "k.md", "s2")
+    eid = item["id"]
+    catalog.entry_path(eid).write_text(json.dumps({**item, "status": "learned"}), "utf-8")
+    graph.upsert_node("src:" + eid[:16], "source", "자료")
+    assert catalog.forget("b", "a.md") is True
+    assert [i["file"] for i in catalog.queued()] == ["keep.md"]
+    assert not catalog.entry_path(eid).exists()
+    assert graph.get_node("src:" + eid[:16]) is None
+
+
+def test_forget_unknown_returns_false(data_dir):
+    assert catalog.forget("nope", "nothing.md") is False

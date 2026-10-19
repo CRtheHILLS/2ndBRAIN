@@ -102,7 +102,8 @@ def queued() -> list[dict]:
     return _read_queue()
 
 
-def register(book: str, filename: str, raw_path: Path, sha256: str) -> dict:
+def register(book: str, filename: str, raw_path: Path, sha256: str,
+             hold_until: str | None = None) -> dict:
     """Put one raw file on the learn queue. Idempotent by (book, filename)."""
     entry_id = make_id(book, filename)
     for item in _read_queue():
@@ -123,6 +124,8 @@ def register(book: str, filename: str, raw_path: Path, sha256: str) -> dict:
         "added_at": dt.datetime.now().isoformat(timespec="seconds"),
         "status": "pending",
     }
+    if hold_until:
+        item["hold_until"] = hold_until
     _append_queue(item)
     return item
 
@@ -131,9 +134,49 @@ def is_learned(entry_id: str) -> bool:
     return entry_path(entry_id).is_file()
 
 
-def pending() -> list[dict]:
-    """Queue entries that have no learned entry file yet."""
-    return [i for i in _read_queue() if not is_learned(i["id"])]
+def pending(include_held: bool = False) -> list[dict]:
+    """Queue entries that have no learned entry file yet.
+
+    Items still inside their ``hold_until`` grace period are left out unless
+    ``include_held`` (they are then marked ``held: True``).
+    """
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    out = []
+    for i in _read_queue():
+        if is_learned(i["id"]):
+            continue
+        held = bool(i.get("hold_until")) and str(i["hold_until"]) > now
+        if held and not include_held:
+            continue
+        out.append({**i, "held": True} if held else i)
+    return out
+
+
+def forget(book: str, filename: str) -> bool:
+    """Drop one item from the queue/learned cards/graph. True if anything was removed."""
+    entry_id = make_id(book, filename)
+    removed = False
+    q = _read_queue()
+    keep = [i for i in q if i["id"] != entry_id]
+    if len(keep) != len(q):
+        queue_path().write_text("".join(json.dumps(i, ensure_ascii=False) + "\n" for i in keep), "utf-8")
+        removed = True
+    p = entry_path(entry_id)
+    if p.is_file():
+        p.unlink()
+        removed = True
+        try:
+            knowledge_graph.remove_node("src:" + entry_id[:16])
+        except Exception as e:  # noqa: BLE001
+            log.warning("graph node removal failed: %s", e)
+    try:
+        from . import ocr
+        fn = getattr(ocr, "remove_pending", None)
+        if fn:
+            fn(entry_id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("ocr pending removal failed: %s", e)
+    return removed
 
 
 def learned() -> list[dict]:

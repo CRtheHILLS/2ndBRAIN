@@ -81,6 +81,13 @@ def _apply(ev: dict, con) -> None:
                      ev.get("evidence", ""), created))
     elif op == "redirect":
         con.execute("INSERT OR REPLACE INTO redirects VALUES (?,?)", (ev["old_id"], ev["new_id"]))
+    elif op == "remove":
+        i = ev["id"]
+        con.execute("DELETE FROM nodes WHERE id=?", (i,))
+        con.execute("DELETE FROM edges WHERE src=? OR dst=?", (i, i))
+        con.execute("DELETE FROM aliases WHERE node_id=?", (i,))
+        con.execute("DELETE FROM node_tags WHERE node_id=?", (i,))
+        con.execute("DELETE FROM redirects WHERE new_id=? OR old_id=?", (i, i))
 
 
 def _write(*events: dict) -> None:
@@ -109,6 +116,16 @@ def upsert_node(id: str, kind: str, label_ko: str, label_en: str = "", wikidata:
     evs += [{"op": "tag", "node_id": id, "tag": t} for t in tags if t]
     _write(*evs)
     return get_node(id)
+
+
+def remove_node(node_id: str) -> bool:
+    """Tombstone a node: log a ``remove`` event and drop its rows (log stays append-only)."""
+    with closing(db.connect()) as con:
+        rid = _resolve(con, node_id)
+        if _node(con, rid) is None:
+            return False
+    _write({"op": "remove", "id": rid})
+    return True
 
 
 def _alias_taken(alias: str, node_id: str) -> bool:
