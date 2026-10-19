@@ -151,4 +151,9 @@ def complete(entry_id: str, text: str) -> dict:
     store.write_md(md, meta, text)
     catalog.register(entry["book"], entry["file"], md, meta.get("sha256", ""))
     remove_pending(entry_id)
+    try:  # tell CR on Telegram; never let a notification break the submission
+        from . import telegram_bot  # noqa: PLC0415 - lazy: the bot imports intake/ingest
+        telegram_bot.notify_ocr_done(entry)
+    except Exception:  # noqa: BLE001
+        pass
     return entry

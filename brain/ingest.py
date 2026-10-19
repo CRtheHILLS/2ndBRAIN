@@ -129,16 +129,18 @@ def _sanitize_filename(filename: str) -> str:
     return name
 
 
-def _catalog_register(slug: str, filename: str, out: Path, sha: str) -> None:
-    """Put the file on the knowledge-catalog learn queue. Never fail ingest."""
+def _catalog_register(slug: str, filename: str, out: Path, sha: str,
+                      hold_until: str | None = None) -> None:
+    """Put the file on the knowledge-catalog learn queue (``hold_until`` = grace period). Never fail ingest."""
     try:
         from . import catalog
-        catalog.register(slug, filename, out, sha)
+        catalog.register(slug, filename, out, sha, hold_until=hold_until)
     except Exception:
         pass
 
 
-def ingest_file(slug: str, filename: str, data: bytes, extra_meta: dict | None = None) -> Path:
+def ingest_file(slug: str, filename: str, data: bytes, extra_meta: dict | None = None,
+                hold_until: str | None = None) -> Path:
     """Store the original, write the markdown. Never raises OcrUnavailable: the md is marked
     ``ocr: pending`` and queued for Clair to transcribe."""
     filename = _sanitize_filename(filename)
@@ -149,7 +151,7 @@ def ingest_file(slug: str, filename: str, data: bytes, extra_meta: dict | None =
     if out.exists() and store.read_md(out)[0].get("sha256") == sha:
         old = store.read_md(out)[0]
         if old.get("ocr") != "pending":
-            _catalog_register(slug, filename, out, sha)
+            _catalog_register(slug, filename, out, sha, hold_until)
             return out
         eid = catalog.make_id(slug, filename)
         if any(r["id"] == eid for r in ocr.list_pending()):
@@ -188,5 +190,5 @@ def ingest_file(slug: str, filename: str, data: bytes, extra_meta: dict | None =
                          "path": str(out), "image": str(store.raw_dir(slug) / filename),
                          "mime": pending_mime})
     else:
-        _catalog_register(slug, filename, out, sha)
+        _catalog_register(slug, filename, out, sha, hold_until)
     return out

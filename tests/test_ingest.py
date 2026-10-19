@@ -131,3 +131,13 @@ def test_docx_ingest_renders_heading_and_table(data_dir):
     assert "# 우주론 개요" in body
     assert "| 용어 | 풀이 |" in body
     assert (store.raw_dir("cosmos") / "notes.docx").exists()
+
+
+def test_hold_until_is_forwarded_to_catalog(data_dir):
+    import datetime as dt
+    from brain import catalog
+    later = (dt.datetime.now() + dt.timedelta(minutes=30)).isoformat(timespec="seconds")
+    ingest.ingest_file("b", "note.txt", "안녕".encode(), hold_until=later)
+    assert catalog.pending() == []
+    (item,) = catalog.pending(include_held=True)
+    assert item["held"] is True and item["hold_until"] == later
