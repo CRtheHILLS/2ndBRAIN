@@ -12,7 +12,7 @@ from fastapi.responses import Response, RedirectResponse, PlainTextResponse, HTM
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from brain import store, ingest, distill, render, index, levels, catalog, think, graph, quest, scheduler
-from brain import retrieve
+from brain import retrieve, ocr
 from brain import ask as ask_mod, vault_export
 from brain.config import get_settings
 from brain.ingest import _sanitize_filename
@@ -643,7 +643,36 @@ async def upload(book: str = Form(...), file: UploadFile = File(...)):
         p = ingest.ingest_file(slug, file.filename, await file.read())
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return {"slug": slug, "path": str(p)}
+    return {"slug": slug, "path": str(p), "ocr": store.read_md(p)[0].get("ocr", "none")}
+
+
+class OcrText(BaseModel):
+    text: str = Field(min_length=1)
+
+
+@app.get("/ocr/pending", dependencies=[Depends(require_token)])
+def ocr_pending():
+    return ocr.list_pending()
+
+
+@app.get("/ocr/file/{entry_id}", dependencies=[Depends(require_token)])
+def ocr_file(entry_id: str):
+    entry = next((r for r in ocr.list_pending() if r["id"] == entry_id), None)
+    img = Path(entry["image"]).resolve() if entry else None
+    if img is None or not img.is_file() or not img.is_relative_to(get_settings().data_dir.resolve()):
+        raise HTTPException(404, "읽을 파일을 찾지 못했어요")
+    return FileResponse(str(img), media_type=entry.get("mime") or "application/octet-stream")
+
+
+@app.post("/ocr/{entry_id}", dependencies=[Depends(require_token)])
+def ocr_submit(entry_id: str, body: OcrText):
+    if not body.text.strip():
+        raise HTTPException(400, "글자가 비어 있어요")
+    try:
+        entry = ocr.complete(entry_id, body.text)
+    except KeyError:
+        raise HTTPException(404, "대기 중인 항목이 아니에요")
+    return {"id": entry["id"], "book": entry["book"], "file": entry["file"], "ocr": "done"}
 
 
 @app.post("/books/{slug}/process", dependencies=[Depends(require_token)])

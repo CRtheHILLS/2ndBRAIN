@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS edges(
     src TEXT, dst TEXT, rel TEXT, weight REAL, reason TEXT, evidence TEXT, created_at TEXT,
     PRIMARY KEY(src, dst, rel));
 CREATE TABLE IF NOT EXISTS redirects(old_id TEXT PRIMARY KEY, new_id TEXT);
+CREATE TABLE IF NOT EXISTS removed(id TEXT PRIMARY KEY);
 CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst);
 CREATE INDEX IF NOT EXISTS idx_nodes_field ON nodes(field_code);
 CREATE INDEX IF NOT EXISTS idx_nodes_kind ON nodes(kind);

@@ -18,6 +18,7 @@ import hashlib
 import itertools
 import json
 import logging
+import os
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -102,8 +103,14 @@ def queued() -> list[dict]:
     return _read_queue()
 
 
-def register(book: str, filename: str, raw_path: Path, sha256: str) -> dict:
-    """Put one raw file on the learn queue. Idempotent by (book, filename)."""
+def register(book: str, filename: str, raw_path: Path, sha256: str,
+             hold_until: str | None = None) -> dict:
+    """Put one raw file on the learn queue. Idempotent by (book, filename).
+
+    ``hold_until`` is an optional local-time ISO string with seconds precision
+    (``datetime.now().isoformat(timespec="seconds")`` style); until then the
+    item is hidden from ``pending()`` (grace period for moving/deleting it).
+    """
     entry_id = make_id(book, filename)
     for item in _read_queue():
         if item["id"] == entry_id:
@@ -123,6 +130,8 @@ def register(book: str, filename: str, raw_path: Path, sha256: str) -> dict:
         "added_at": dt.datetime.now().isoformat(timespec="seconds"),
         "status": "pending",
     }
+    if hold_until:
+        item["hold_until"] = hold_until
     _append_queue(item)
     return item
 
@@ -131,9 +140,53 @@ def is_learned(entry_id: str) -> bool:
     return entry_path(entry_id).is_file()
 
 
-def pending() -> list[dict]:
-    """Queue entries that have no learned entry file yet."""
-    return [i for i in _read_queue() if not is_learned(i["id"])]
+def pending(include_held: bool = False) -> list[dict]:
+    """Queue entries that have no learned entry file yet.
+
+    Items still inside their ``hold_until`` grace period are left out unless
+    ``include_held`` (they are then marked ``held: True``).
+    """
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    out = []
+    for i in _read_queue():
+        if is_learned(i["id"]):
+            continue
+        held = bool(i.get("hold_until")) and str(i["hold_until"]) > now
+        if held and not include_held:
+            continue
+        out.append({**i, "held": True} if held else i)
+    return out
+
+
+def forget(book: str, filename: str) -> bool:
+    """Drop one item from the queue/learned cards/graph. True if anything was removed."""
+    entry_id = make_id(book, filename)
+    removed = False
+    q = _read_queue()
+    keep = [i for i in q if i["id"] != entry_id]
+    if len(keep) != len(q):
+        qp = queue_path()
+        tmp = qp.with_suffix(".jsonl.tmp")
+        tmp.write_text("".join(json.dumps(i, ensure_ascii=False) + "\n" for i in keep), "utf-8")
+        os.replace(tmp, qp)
+        removed = True
+    p = entry_path(entry_id)
+    if p.is_file():
+        p.unlink()
+        removed = True
+    try:
+        if knowledge_graph.remove_node("src:" + entry_id[:16]):
+            removed = True
+    except Exception as e:  # noqa: BLE001
+        log.warning("graph node removal failed: %s", e)
+    try:
+        from . import ocr
+        if any(r.get("id") == entry_id for r in ocr.list_pending()):
+            removed = True
+        ocr.remove_pending(entry_id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("ocr pending removal failed: %s", e)
+    return removed
 
 
 def learned() -> list[dict]:
@@ -386,8 +439,12 @@ def stats() -> dict:
     books |= {e.get("book") for e in done if e.get("book")}
     concepts = {c for e in done for c in (e.get("concepts") or [])}
     learned_ids = {e.get("id") for e in done}
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    waiting = [i for i in q if i["id"] not in learned_ids]
+    held = sum(1 for i in waiting if i.get("hold_until") and str(i["hold_until"]) > now)
     return {
-        "pending": sum(1 for i in q if i["id"] not in learned_ids),
+        "pending": len(waiting) - held,
+        "held": held,
         "learned": len(done),
         "books": len(books),
         "concepts": len(concepts),
