@@ -94,3 +94,12 @@
 6. **ingest 계약:** `ingest_file(slug, filename, data, extra_meta=None)`; `OcrUnavailable`이면 **모든 호출자**(텔레그램·`/upload`)에서 본문 빈 마크다운 + `ocr: pending` + 대기 큐. `/upload` 응답에 `ocr` 필드 추가. `llm.ocr_image`는 `ocr.py` 안의 anthropic 어댑터로만 남는다.
 7. **버튼 데이터:** `callback_data`는 짧은 키(`b:7`, `k:3`)로 하고 매핑은 state.json에. 만료된 버튼은 "만료됐어요"로만 답하고 아무것도 하지 않는다.
 8. **이 책에서 배우기:** `quest.create` + `start_background`, 답장은 지도 링크만(토큰 없음).
+
+## 10. 빌드 장부 요약 (2026-10-19, `.superpowers/sdd/2026-10-19-telegram-book-intake/progress.md`에서 옮김)
+- 진행 방식: 학습 퀘스트와 같은 워크트리 병렬 방식. editable install은 빌드 동안 제거(워크트리 격리), 끝나고 재설치.
+- T1 OCR 체인·대기열(sonnet) → 리뷰 Important 3(OCR 사용량을 think 상한에 합산, 키 없는 anthropic 호출, extra_meta가 핵심 키 덮어씀) 수정 뒤 병합.
+- T2 접수 상태기계+봇(opus) → 리뷰 Critical 1(책 질문이 열려 있는 동안 온 사진이 옛 책에 붙음) + Important 3(부분 실패 상태 어긋남, awaiting_title TTL, 20MB 가드) 수정. 승인된 이탈: 옮기기는 현재 책도 바꿈; 보류+제목이면 물어봄; 파괴 동작은 두 번 확인.
+- T3 분할: T3a(catalog hold_until/forget + graph remove_node 묘비 테이블 `removed`; 통계에서 보류 항목 제외, 고아 간선 정리) ‖ T3b(웹훅·순서 보장 워커·앨범 2초 버퍼·/telegram/setup·README; 공개 URL 없어도 워커 시작) ‖ T3c(끈끈한 보류 + 10분 뒤 재질문, 24시간 뒤 보류 정리, hold_until 전달, OCR 완료 알림 + 밑줄 보기).
+- T5 표시 인식 판독(`==…==`, `## 표시 목록`/`## 독자 메모`/`## 쪽수`, `brain/marks.py`), `OCR_MODE=clair`(텔레그램 사진은 Clair가 직접 읽음), 배우기 버튼 숨김(`TELEGRAM_LEARN_BUTTON`), `/read-page` 스킬, CLI `ocr list|get|submit`. 리뷰 Important 2 → 빈 뼈대 제출 거부(API 400·CLI 종료 2), 프롬프트의 한국어 제목·[kind] 고정·코드 펜스 금지, 대기 항목에 `reason` 기록 (2f05fcf).
+- 보류(나중에): 도착순 처리(update_id 엄격 정렬 아님), 봇 알림은 재시작 때 유실, `intake.py` 분리, 대기열 다시 쓰기의 잠금 없는 틈, 시작 시 setup 동기 호출.
+- 배포: 2026-10-19 production, `/telegram/setup` OK(명령 7개), getWebhookInfo 정상, 인증 없는 웹훅 403, `/graph/rebuild` 4956건 재생. 전체 테스트 555 통과. main 병합 e607fa4.
