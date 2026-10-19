@@ -2,8 +2,9 @@
 
 ## 2026-10-19 내일 제일 먼저 — 마지막 수정 묶음 병합·배포 (CR 지시: 테스트는 내일)
 - [x] (2026-10-19) 전체 테스트 420개 통과 → `main`에 병합(c16061d) → `pip install -e .`로 `brain-sync`/`brain-learn` 명령 복구
-- [ ] (2026-10-19 진행 중) main에서 `railway up` → 아래 확인 항목
-- [ ] 배포 후 확인: `GET /vault.zip`(지금 배포본은 500 — 수정 묶음에 고침 포함), `python -m sync.learn_cli ask "창세기 첫째 날의 빛이 태양보다 먼저인 건 과학적으로?"`(수정 전엔 수업 내용을 못 찾음), `/search`는 이제 토큰 필요, 그래프 페이지 토큰은 `#t=`로 바뀜
+- [x] (2026-10-19) main 배포 완료. 확인: 수업 페이지·그래프 페이지 200, `/search` 토큰 없으면 401, `/vault.zip` 200(585개 파일, 위키링크·수업 링크 정상)
+- [ ] `/ask`가 수업 내용을 찾으려면 배포 뒤 **FTS 재색인 1회** 필요: `POST /index/rebuild`(토큰) — 2026-10-19에 라우트 추가·실행. 이후 `brain-learn ask "창세기 첫째 날의 빛이 태양보다 먼저인 건 과학적으로?"`로 Day 4 내용이 인용되는지 확인
+- [ ] 수업 점에서 새로 생긴 개념은 분야 코드가 비어 Obsidian `미분류/`에 들어감(예: '열역학 제1법칙과 우주의 시작') → teach 단계에서 개념 만들 때 퀘스트 plan의 분야(또는 classify)로 field_code 채우기
 - [ ] 재검토는 깨끗했지만 아래 다섯 우려는 운영하며 지켜볼 것 → 필요하면 `.superpowers/sdd/2026-10-18-learn-quest/final-fix-report.md`를 읽고, 의심되면 `tests/` 전체 + 아래 다섯 우려를 눈으로 확인: ① `_thin` 규칙이 벡터 꺼진 상태에서 웹을 자주 부름 ② `xai_search.CURRENT_LOG` 전역(퀘스트 2개 동시 수집 시 로그 섞임) ③ 검색 사용량은 일일 상한에서 제외(비용 추정엔 포함) ④ vec 확장은 연결마다 load ⑤ 2글자 검색은 LIKE 전체 스캔
 - [ ] 진행 장부: `.superpowers/sdd/2026-10-18-learn-quest/progress.md` (모든 결정·보류 항목). 워크트리 `.claude/worktrees/agent-a00fdbafac0816606`는 병합 후 `git worktree remove --force`
 - 현재 배포본 = feat/learn-quest @ fb319c5 (퀘스트·다리·그래프·검색·/ask 동작, vault.zip만 500). 로컬 `feat/learn-quest`는 38747e3 이후 문서 커밋만 추가됨

@@ -448,3 +448,13 @@ def test_rebridge_route_requires_token_and_returns_counts(data_dir, monkeypatch)
         monkeypatch.setattr(bridge, "rebridge", unavailable)
         r = c.post("/graph/rebridge", headers=tok)
         assert r.status_code == 503 and "no key" in r.json()["detail"]
+
+
+def test_index_rebuild_route_requires_token(data_dir):
+    from api.main import app
+    from brain import ingest
+    ingest.ingest_file("cosmos", "a.txt", "우주는 넓다".encode())
+    with TestClient(app) as c:
+        assert c.post("/index/rebuild").status_code in (401, 403)
+        r = c.post("/index/rebuild", headers={"X-Brain-Token": "test-token"})
+    assert r.status_code == 200 and r.json()["indexed"] >= 1

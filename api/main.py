@@ -799,6 +799,12 @@ def graph_rebuild():
     return {"replayed": graph.rebuild()}
 
 
+@app.post("/index/rebuild", dependencies=[Depends(require_token)])
+def index_rebuild():
+    """전문검색(FTS) 색인을 책 원문 + 퀘스트 수업 전체로 다시 만들어요 (배포 뒤 1회용)."""
+    return {"indexed": index.rebuild()}
+
+
 REBRIDGE_CHUNK = 5  # nodes per think call (5 x 8 candidates = the 40-pair batch)
 
 
