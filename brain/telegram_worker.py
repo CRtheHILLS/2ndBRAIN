@@ -1,8 +1,8 @@
 """Single ordered worker for Telegram updates, with media-group (album) buffering.
 
-Updates are processed strictly in ``update_id`` order. An album (updates sharing a
-``media_group_id``) is held until its window closes, then released as a block at its first
-member's position; later updates wait behind it. A caption on any member is copied onto the rest.
+Guarantee: arrival order with sorting of queued updates; albums are released as a block at the
+first member's position after a 2 s window; a member arriving after the window becomes a separate
+group. Later updates wait behind a buffered album. A caption on any member is copied onto the rest.
 """
 import logging
 import threading
@@ -119,15 +119,17 @@ def _tick(now: float) -> int:
                 _busy = batch is not None
             if batch is None:
                 return handled
-            _share_caption(batch)
-            for u in batch:
-                try:
-                    _handle(u)
-                except Exception as e:  # noqa: BLE001 - the worker must survive any handler error
-                    log.error("텔레그램 업데이트 처리 실패: %s", _mask(e))
-                handled += 1
-            with _lock:
-                _busy = False
+            try:
+                _share_caption(batch)
+                for u in batch:
+                    try:
+                        _handle(u)
+                    except Exception as e:  # noqa: BLE001 - the worker must survive any handler error
+                        log.error("텔레그램 업데이트 처리 실패: %s", _mask(e))
+                    handled += 1
+            finally:
+                with _lock:
+                    _busy = False
 
 
 def _loop() -> None:

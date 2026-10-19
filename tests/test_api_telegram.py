@@ -82,6 +82,17 @@ def test_setup_calls_telegram(tg, monkeypatch):
     assert ("hook", "https://brain.example.com/telegram/webhook", "s3cret") in calls
 
 
+def test_worker_starts_without_public_url(tg, monkeypatch):
+    started, setups = [], []
+    monkeypatch.setattr(telegram_worker, "start", lambda: started.append(1))
+    monkeypatch.setattr(telegram_worker, "stop", lambda: None)
+    monkeypatch.setattr(telegram_bot, "TelegramAPI", lambda t: setups.append(t))
+    from api.main import app
+    with TestClient(app):
+        pass
+    assert started == [1] and setups == []
+
+
 def test_tick_includes_holding_purged(data_dir, monkeypatch):
     from brain import intake
     monkeypatch.setattr(intake, "purge_holding", lambda h=24: 3, raising=False)

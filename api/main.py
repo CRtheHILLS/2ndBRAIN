@@ -512,12 +512,13 @@ async def lifespan(app: FastAPI):
     app.mount("/site", StaticFiles(directory=store.site_dir(), html=True), name="site")
     scheduler.start()
     cfg = get_settings()
-    if cfg.telegram_bot_token and cfg.brain_public_url:
+    if cfg.telegram_bot_token:
         telegram_worker.start()
-        try:
-            _telegram_setup()
-        except Exception as e:  # noqa: BLE001 - never block startup
-            log.warning("텔레그램 웹훅 자동 설정 실패: %s", str(e).replace(cfg.telegram_bot_token, "***"))
+        if cfg.brain_public_url:
+            try:
+                _telegram_setup()
+            except Exception as e:  # noqa: BLE001 - never block startup
+                log.warning("텔레그램 웹훅 자동 설정 실패: %s", str(e).replace(cfg.telegram_bot_token, "***"))
     try:
         yield
     finally:
