@@ -3,7 +3,8 @@
 ## 2026-10-19 내일 제일 먼저 — 마지막 수정 묶음 병합·배포 (CR 지시: 테스트는 내일)
 - [x] (2026-10-19) 전체 테스트 420개 통과 → `main`에 병합(c16061d) → `pip install -e .`로 `brain-sync`/`brain-learn` 명령 복구
 - [x] (2026-10-19) main 배포 완료. 확인: 수업 페이지·그래프 페이지 200, `/search` 토큰 없으면 401, `/vault.zip` 200(585개 파일, 위키링크·수업 링크 정상)
-- [ ] `/ask`가 수업 내용을 찾으려면 배포 뒤 **FTS 재색인 1회** 필요: `POST /index/rebuild`(토큰) — 2026-10-19에 라우트 추가·실행. 이후 `brain-learn ask "창세기 첫째 날의 빛이 태양보다 먼저인 건 과학적으로?"`로 Day 4 내용이 인용되는지 확인
+- [x] (2026-10-19) `POST /index/rebuild` 실행(1,137건 색인, 수업 7장 포함). `/search`는 Day 4 수업을 1위로 찾음. `/ask`는 수업 페이지(Day 2·7)를 인용하지만 Day 4의 '빛이 태양보다 먼저' 설명은 아직 정확히 못 집음
+- [ ] `/ask` 정밀도 보강: 수업 문서는 400자 발췌 대신 day JSON의 점 카드(한 줄·비유·진짜 예·왜 중요)를 통째로 구절로 넣고, 질문과 가장 가까운 점 2~3개를 고르기 (`brain/retrieve.py` excerpts + `brain/ask.py`)
 - [ ] 수업 점에서 새로 생긴 개념은 분야 코드가 비어 Obsidian `미분류/`에 들어감(예: '열역학 제1법칙과 우주의 시작') → teach 단계에서 개념 만들 때 퀘스트 plan의 분야(또는 classify)로 field_code 채우기
 - [ ] 재검토는 깨끗했지만 아래 다섯 우려는 운영하며 지켜볼 것 → 필요하면 `.superpowers/sdd/2026-10-18-learn-quest/final-fix-report.md`를 읽고, 의심되면 `tests/` 전체 + 아래 다섯 우려를 눈으로 확인: ① `_thin` 규칙이 벡터 꺼진 상태에서 웹을 자주 부름 ② `xai_search.CURRENT_LOG` 전역(퀘스트 2개 동시 수집 시 로그 섞임) ③ 검색 사용량은 일일 상한에서 제외(비용 추정엔 포함) ④ vec 확장은 연결마다 load ⑤ 2글자 검색은 LIKE 전체 스캔
 - [ ] 진행 장부: `.superpowers/sdd/2026-10-18-learn-quest/progress.md` (모든 결정·보류 항목). 워크트리 `.claude/worktrees/agent-a00fdbafac0816606`는 병합 후 `git worktree remove --force`
