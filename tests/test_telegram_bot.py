@@ -403,7 +403,7 @@ def test_learn_button_starts_quest_with_map_link(env, monkeypatch):
     labels = [b["text"] for row in env["api"].calls[-1]["markup"]["inline_keyboard"] for b in row]
     assert labels == ["7일 퀘스트 시작", "하루 압축", "취소"]
     press_label(env, "7일 퀘스트 시작")
-    assert created == [("《손자병법》 책에서 밑줄 친 부분을 중심으로 깊이 이해하고 싶어", 7, "telegram")]
+    assert created == [("《손자병법》 책에서 밑줄 친 부분을 중심으로 7일 동안 깊이 이해하고 싶어", 7, "telegram")]
     assert started == ["son-quest"]
     reply = env["api"].calls[-1]["text"]
     assert "https://brain.example/site/quests/son-quest/index.html" in reply
@@ -430,6 +430,7 @@ def test_korean_particles():
     assert telegram_bot._ro("손자병법") == "으로" and telegram_bot._ro("창세기") == "로"
     assert telegram_bot._ro("하늘") == "로"
     assert telegram_bot._ieot("창세기") == "였어요" and telegram_bot._ieot("손자병법") == "이었어요"
+    assert telegram_bot._ieot("Sapiens") == "(이)었어요"
 
 
 # --- Bot API client -------------------------------------------------------------------
@@ -459,3 +460,90 @@ def test_api_client_payloads_and_token_masking(env, caplog):
         assert api.send_message(1, "안녕") == {}
     assert TOKEN not in caplog.text and "***" in caplog.text
     assert api.get_file("abc") == (b"JPEG", "f_1.jpg", "image/jpeg")
+
+
+# --- review fixes -------------------------------------------------------------
+
+def test_photos_during_new_title_question_wait_for_the_answer(env):
+    env["clock"].t = dt.datetime(2026, 10, 19, 9, 0, tzinfo=S.SEOUL)
+    set_book(env)  # morning: 손자병법
+    env["clock"].t = dt.datetime(2026, 10, 19, 13, 0, tzinfo=S.SEOUL)
+    text(env, "사피엔스")
+    question = env["api"].calls[-1]
+    for i in range(3):
+        photo(env, f"s{i}")
+    assert intake.book_count("손자병법") == 0 and intake.holding_count() == 3
+    last = env["api"].calls[-1]
+    assert last["m"] == "edit" and last["mid"] == question["mid"]
+    assert last["text"].endswith("📥 사진 3장은 책을 고르면 거기에 붙일게요.")
+    assert last["markup"] == question["markup"]
+    press_label(env, "새 책으로 만들기")
+    assert intake.book_count("사피엔스") == 3 and intake.holding_count() == 0
+    assert intake.current()["slug"] == "사피엔스"
+    assert "《사피엔스》에 3장 붙였어요" in env["api"].calls[-1]["text"]
+
+
+def test_cancel_book_question_shows_holding_question(env):
+    set_book(env)
+    text(env, "사피엔스")
+    photo(env, "s1")
+    press_label(env, "취소")
+    assert env["api"].calls[-1]["text"].endswith("이 사진 1장, 어느 책이에요?")
+    assert intake.holding_count() == 1 and intake.book_count("손자병법") == 0
+
+
+def test_book_picker_holds_photos_until_chosen(env):
+    set_book(env)
+    text(env, telegram_bot.MENU_BOOK)
+    photo(env, "p1")
+    assert intake.holding_count() == 1
+    press_label(env, "《창세기》")
+    assert intake.book_count("창세기") == 1 and intake.book_count("손자병법") == 0
+
+
+def test_awaiting_title_expires_after_10_minutes(env):
+    text(env, telegram_bot.MENU_BOOK)
+    press_label(env, "➕ 새 책")
+    env["clock"].tick(minutes=11)
+    text(env, "총균쇠")
+    assert not any(b["slug"] == "총균쇠" for b in store.list_books())  # not created silently
+    assert "처음 보는 책이에요" in env["api"].calls[-1]["text"]
+    assert S.ui_get("awaiting_title") is None
+
+
+def test_file_over_20mb_is_refused_without_download(env, monkeypatch):
+    downloads = []
+    monkeypatch.setattr(env["api"], "get_file", lambda fid: downloads.append(fid))
+    set_book(env)
+    _send(env, document={"file_id": "big", "file_name": "scan.jpg", "mime_type": "image/jpeg",
+                         "file_size": 21 * 1024 * 1024})
+    _send(env, photo=[{"file_id": "big2", "file_size": 20 * 1024 * 1024 + 1}])
+    assert downloads == []
+    assert env["api"].calls[-1]["text"] == ("📎 이 파일은 20MB가 넘어서 받을 수 없어요. "
+                                            "사진으로 보내 주시거나 조금 줄여서 보내 주세요.")
+
+
+def test_duplicate_after_batch_window_opens_no_batch(env):
+    set_book(env)
+    photo(env, "same")
+    env["clock"].tick(seconds=200)
+    photo(env, "same")
+    photo(env, "same")
+    assert len(intake.recent_batches(10)) == 1
+    assert env["api"].calls[-2]["text"] == "같은 사진이 이미 《손자병법》에 있어서 1장 건너뛰었어요."
+    assert env["api"].calls[-1]["m"] == "edit" and "2장 건너뛰었어요" in env["api"].calls[-1]["text"]
+
+
+def test_one_day_learn_sentence_differs(env, monkeypatch):
+    created = []
+
+    def fake_create(s, days=None, level=None, started_by="cli"):
+        created.append(s)
+        return {"slug": "q1", "status": "queued", "existing": False}
+
+    monkeypatch.setattr(quest, "create", fake_create)
+    monkeypatch.setattr(quest, "start_background", lambda slug: True)
+    set_book(env)
+    text(env, telegram_bot.MENU_LEARN)
+    press_label(env, "하루 압축")
+    assert created == ["《손자병법》 책에서 밑줄 친 부분을 중심으로 하루 동안 깊이 이해하고 싶어"]

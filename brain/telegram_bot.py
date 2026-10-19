@@ -18,9 +18,11 @@ from . import intake_state as S
 from .config import get_settings
 
 log = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)  # httpx INFO lines would print the bot token URL
 
 API_BASE = "https://api.telegram.org"
 TIMEOUT = 30
+MAX_FILE_BYTES = 20 * 1024 * 1024  # Bot API getFile download limit
 _UI_LOCK = threading.RLock()  # one confirmation message per batch even when album photos race
 
 MENU_BOOK, MENU_NOW, MENU_MOVE = "📚 책 고르기", "📖 지금 책", "🔁 방금 묶음 옮기기"
@@ -138,8 +140,9 @@ def _ro(title: str) -> str:
 
 
 def _ieot(title: str) -> str:
-    """조사 이었어요/였어요: 손자병법이었어요 / 창세기였어요."""
-    return "였어요" if _final_consonant(title) == 0 else "이었어요"
+    """조사 이었어요/였어요: 손자병법이었어요 / 창세기였어요 / Sapiens(이)었어요."""
+    j = _final_consonant(title)
+    return "(이)었어요" if j is None else ("였어요" if j == 0 else "이었어요")
 
 
 def _book(title: str) -> str:
@@ -285,7 +288,8 @@ def _learn_confirm(api, chat, mid, slug: str, title: str) -> None:
 
 
 def _start_learn(api, chat, mid, title: str, days: int) -> None:
-    sentence = f"《{title}》 책에서 밑줄 친 부분을 중심으로 깊이 이해하고 싶어"
+    span = "7일 동안" if days >= 7 else "하루 동안"  # distinct sentences: find_existing must not mix them
+    sentence = f"《{title}》 책에서 밑줄 친 부분을 중심으로 {span} 깊이 이해하고 싶어"
     q = quest.create(sentence, days=days, started_by="telegram")
     if q.get("status") != "done":
         quest.start_background(q["slug"])
@@ -301,32 +305,66 @@ def _start_learn(api, chat, mid, title: str, days: int) -> None:
 # picking a book (from buttons or typed titles)
 # ---------------------------------------------------------------------------
 
+def _ask_book(api, chat, mid, text: str, markup: dict | None, kind: str) -> None:
+    """Ask which book (send or edit) and remember the open question for ``intake.CHOICE_TTL``.
+
+    While it is open, photos go to holding instead of the possibly stale current book.
+    """
+    held = (intake.pending_choice() or {}).get("held", 0)
+    if held:
+        text += f"\n\n📥 사진 {held}장은 책을 고르면 거기에 붙일게요."
+    res = _reply(api, chat, mid, text, markup)
+    mid = mid or res.get("message_id")
+    S.ui_set("pending_choice", {"at": S.iso(S.now_seoul()), "kind": kind, "chat_id": chat,
+                                "message_id": mid, "text": text.split("\n\n📥 ")[0], "markup": markup,
+                                "held": held})
+
+
+def _resolve_into(api, chat, mid, slug: str, title: str) -> None:
+    """Attach holding to a book and show it as one batch confirmation."""
+    r = intake.resolve_holding(slug, title)
+    S.ui_set("holding_msg", None)
+    if r["status"] == "empty":
+        _reply(api, chat, mid, "보류함이 이미 비어 있어요.")
+        return
+    if r["status"] == "duplicate":
+        _reply(api, chat, mid, f"보류함 사진은 모두 이미 {_book(title)}에 있던 사진이라 건너뛰었어요.")
+        return
+    if r["status"] == "failed":
+        _reply(api, chat, mid, "⚠️ 보류함 사진을 붙이지 못했어요. 사진은 보류함에 그대로 있어요.")
+        return
+    b = intake.get_batch(r["batch_id"])
+    if mid:
+        intake.set_batch_message(b["id"], chat, mid)
+        b = intake.get_batch(b["id"])
+    note = f"이제부터 사진은 {_book(title)}에 붙여요."
+    if r.get("failed"):
+        note += f"\n⚠️ {r['failed']}장은 붙이지 못해서 보류함에 남겨 두었어요."
+    _render_batch(api, b, note=note, chat=chat)
+
+
 def _apply_pick(api, chat, mid, purpose: str, slug: str, title: str, batch: str | None = None,
                 new: bool = False) -> None:
     if new:
         intake.ensure_book(slug, title)
     title = intake.book_title(slug) or title
     if purpose == "hold":
-        r = intake.resolve_holding(slug, title)
-        S.ui_set("holding_msg", None)
-        if r["status"] == "empty":
-            _reply(api, chat, mid, "보류함이 이미 비어 있어요.")
-            return
-        b = intake.get_batch(r["batch_id"])
-        if mid:
-            intake.set_batch_message(b["id"], chat, mid)
-            b = intake.get_batch(b["id"])
-        _render_batch(api, b, note=f"이제부터 사진은 {_book(title)}에 붙여요.", chat=chat)
+        _resolve_into(api, chat, mid, slug, title)
     elif purpose == "move":
         old = intake.get_batch(batch or "")
         r = intake.move_batch(batch or "", slug, title)
-        if not r.get("ok") or old is None:
+        if old is None or r.get("reason") == "unknown_batch":
             _reply(api, chat, mid, "그 묶음은 이제 없어요.")
+            return
+        if not r.get("ok"):
+            _reply(api, chat, mid, "⚠️ 사진을 옮기지 못했어요. 원래 책에 그대로 있어요.")
             return
         b = intake.get_batch(batch)
         note = f"🔁 {_book(old['title'])}에서 옮겨 왔어요."
         if r.get("current_switched"):
             note += f" 지금 읽는 책도 {_book(title)}{_ro(title)} 바꿨어요."
+        if r.get("failed"):
+            note += f"\n⚠️ {r['failed']}장은 옮기지 못해서 {_book(old['title'])}에 남겨 두었어요."
         same = (b.get("message") or {}).get("message_id") == mid
         _render_batch(api, b, note=note, chat=None)
         if not same:
@@ -334,10 +372,14 @@ def _apply_pick(api, chat, mid, purpose: str, slug: str, title: str, batch: str 
     elif purpose == "learn":
         _learn_confirm(api, chat, mid, slug, title)
     else:
+        pc = intake.pending_choice()
+        S.ui_set("pending_choice", None)
         intake.set_current(slug, title)
         _reply(api, chat, mid, text_book_set(title, intake.book_count(slug)))
         n = intake.holding_count()
-        if n:
+        if n and pc and pc.get("held"):  # photos sent while this question was open: CR just answered it
+            _resolve_into(api, chat, None, slug, title)
+        elif n:
             rows = [[("네, 붙여요", {"a": "pick", "slug": slug, "title": title, "for": "hold"}),
                      ("아니요, 그대로 둘게요", {"a": "cancel"})]]
             S.ui_set("holding_msg", None)
@@ -347,6 +389,9 @@ def _apply_pick(api, chat, mid, purpose: str, slug: str, title: str, batch: str 
 def _on_title(api, chat, text: str) -> None:
     waiting = S.ui_get("awaiting_title")
     S.ui_set("awaiting_title", None)
+    at = S.parse((waiting or {}).get("at"))
+    if waiting and (at is None or S.now_seoul() - at > intake.CHOICE_TTL):
+        waiting = None  # a title wait older than 10 minutes is forgotten
     purpose = (waiting or {}).get("for", "set")
     batch = (waiting or {}).get("batch")
     m = intake.match_title(text)
@@ -362,12 +407,21 @@ def _on_title(api, chat, text: str) -> None:
                   {"a": "pick", "slug": c["slug"], "title": c["title"], "for": purpose, "batch": batch})]
                 for c in m["candidates"]]
         rows += [[(f"새 책 {_book(_short(m['title']))}", new_pick)], [("취소", {"a": "cancel"})]]
-        api.send_message(chat, "📚 서재에 비슷한 책이 있어요. 같은 책인가요?", _kb(rows))
+        _ask(api, chat, purpose, "📚 서재에 비슷한 책이 있어요. 같은 책인가요?", _kb(rows), "similar")
     elif waiting:
         _apply_pick(api, chat, None, purpose, m["slug"], m["title"], batch, new=True)
     else:
         rows = [[("새 책으로 만들기", new_pick)], [("취소", {"a": "cancel"})]]
-        api.send_message(chat, f"📚 {_book(m['title'])}, 처음 보는 책이에요. 새 책으로 만들까요?", _kb(rows))
+        _ask(api, chat, purpose, f"📚 {_book(m['title'])}, 처음 보는 책이에요. 새 책으로 만들까요?",
+             _kb(rows), "new")
+
+
+def _ask(api, chat, purpose: str, text: str, markup: dict, kind: str) -> None:
+    """A question about the reading book holds photos; other questions (move, learn) do not."""
+    if purpose == "set":
+        _ask_book(api, chat, None, text, markup, kind)
+    else:
+        api.send_message(chat, text, markup)
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +459,8 @@ def _menu_now(api, chat) -> None:
     if cur:
         api.send_message(chat, text_book_set(cur["title"], intake.book_count(cur["slug"])))
     else:
-        api.send_message(chat, "📖 지금 정해진 책이 없어요. 사진을 보내기 전에 책을 골라 주세요.", _picker("set"))
+        _ask_book(api, chat, None, "📖 지금 정해진 책이 없어요. 사진을 보내기 전에 책을 골라 주세요.",
+                  _picker("set"), "picker")
 
 
 def _menu_learn(api, chat) -> None:
@@ -446,7 +501,7 @@ def _on_text(api, chat, text: str) -> None:
         if arg:
             _on_title(api, chat, arg)
         else:
-            api.send_message(chat, "📚 어느 책을 읽고 있어요?", _picker("set"))
+            _ask_book(api, chat, None, "📚 어느 책을 읽고 있어요?", _picker("set"), "picker")
     elif cmd == "/start":
         api.send_message(chat, "🌙 안녕하세요, Clair예요. 책 제목을 보내고 밑줄 친 쪽 사진을 보내 주세요. "
                                "아래 메뉴 버튼으로 언제든 책을 고를 수 있어요.", keyboards.main_menu())
@@ -462,18 +517,54 @@ def _image_doc(doc: dict | None) -> bool:
     return bool(doc) and str(doc.get("mime_type", "")).startswith("image/")
 
 
+def _render_held(api, chat) -> None:
+    """A held photo: add a line to the open book question, or ask the holding question."""
+    pc = intake.pending_choice()
+    if not (pc and pc.get("message_id")):
+        _render_holding(api, chat)
+        return
+    n = intake.holding_count()
+    api.edit_message_text(pc["chat_id"], pc["message_id"],
+                          f"{pc['text']}\n\n📥 사진 {n}장은 책을 고르면 거기에 붙일게요.",
+                          reply_markup=pc.get("markup"))
+    S.ui_set("pending_choice", {**pc, "held": n})
+
+
+def _render_duplicate(api, chat, slug: str) -> None:
+    """All-duplicate photos open no batch; one short note, its count edited for 90 seconds."""
+    now = S.now_seoul()
+    slot = S.ui_get("dupe_msg")
+    at = S.parse((slot or {}).get("at"))
+    title = intake.book_title(slug)
+    if slot and slot.get("slug") == slug and at and now - at <= intake.BATCH_GAP:
+        n = slot["n"] + 1
+        api.edit_message_text(slot["chat_id"], slot["message_id"],
+                              f"같은 사진이 이미 {_book(title)}에 있어서 {n}장 건너뛰었어요.")
+        S.ui_set("dupe_msg", {**slot, "n": n, "at": S.iso(now)})
+        return
+    res = api.send_message(chat, f"같은 사진이 이미 {_book(title)}에 있어서 1장 건너뛰었어요.")
+    S.ui_set("dupe_msg", {"chat_id": chat, "message_id": res.get("message_id"), "slug": slug, "n": 1,
+                          "at": S.iso(now)})
+
+
 def _on_photo(api, chat, msg: dict) -> None:
     if msg.get("photo"):
-        fid, fname, mime = msg["photo"][-1]["file_id"], "", "image/jpeg"
+        item, fname, mime = msg["photo"][-1], "", "image/jpeg"
     else:
-        doc = msg["document"]
-        fid, fname, mime = doc["file_id"], doc.get("file_name") or "", doc.get("mime_type") or ""
-    data, path_name, guessed = api.get_file(fid)  # download outside the lock
+        item = msg["document"]
+        fname, mime = item.get("file_name") or "", item.get("mime_type") or ""
+    if (item.get("file_size") or 0) > MAX_FILE_BYTES:  # Bot API getFile limit
+        api.send_message(chat, "📎 이 파일은 20MB가 넘어서 받을 수 없어요. "
+                               "사진으로 보내 주시거나 조금 줄여서 보내 주세요.")
+        return
+    data, path_name, guessed = api.get_file(item["file_id"])  # download outside the lock
     with _UI_LOCK:
         r = intake.add_photo(data, fname or path_name, mime or guessed, caption=msg.get("caption") or "",
                              media_group_id=msg.get("media_group_id"))
         if r["status"] == "held":
-            _render_holding(api, chat)
+            _render_held(api, chat)
+        elif r["status"] == "duplicate":
+            _render_duplicate(api, chat, r["slug"])
         else:
             _render_batch(api, intake.get_batch(r["batch_id"]), chat=chat)
 
@@ -510,14 +601,26 @@ def _on_callback(api, cq: dict) -> None:
     if a == "pick":
         _apply_pick(api, chat, mid, p["for"], p["slug"], p["title"], p.get("batch"), new=bool(p.get("new")))
     elif a == "newbook":
-        S.ui_set("awaiting_title", {"for": p["for"], "batch": p.get("batch")})
-        _reply(api, chat, mid, "✏️ 새 책 제목을 글로 보내 주세요.")
+        S.ui_set("awaiting_title", {"for": p["for"], "batch": p.get("batch"), "at": S.iso(S.now_seoul())})
+        if p["for"] == "set":
+            _ask_book(api, chat, mid, "✏️ 새 책 제목을 글로 보내 주세요.", None, "title")
+        else:
+            _reply(api, chat, mid, "✏️ 새 책 제목을 글로 보내 주세요.")
     elif a == "more":
         S.consume_group(p["g"])
-        _reply(api, chat, mid, "📚 다른 책들이에요.", _picker(p["for"], p.get("batch"), p["off"], p.get("exclude")))
+        markup = _picker(p["for"], p.get("batch"), p["off"], p.get("exclude"))
+        if p["for"] == "set":
+            _ask_book(api, chat, mid, "📚 다른 책들이에요.", markup, "picker")
+        else:
+            _reply(api, chat, mid, "📚 다른 책들이에요.", markup)
     elif a == "cancel":
         S.ui_set("awaiting_title", None)
+        pc = intake.pending_choice()
+        S.ui_set("pending_choice", None)
         _reply(api, chat, mid, "알겠어요, 그대로 둘게요.")
+        if pc and intake.holding_count():  # photos waited for this answer: ask where they go
+            S.ui_set("holding_msg", None)
+            _render_holding(api, chat)
     elif a == "ok":
         intake.confirm_batch(batch["id"])
         _render_batch(api, intake.get_batch(batch["id"]))

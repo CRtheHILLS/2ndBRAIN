@@ -11,10 +11,10 @@ State lives in ``intake_state`` (atomic json + one process lock).
 import datetime as dt
 import difflib
 import hashlib
-import shutil
+import logging
 from pathlib import Path
 
-from . import catalog, graph, index, ingest, store
+from . import catalog, index, ingest, store
 from . import intake_state as S
 from .config import get_settings
 from .slug import slugify
@@ -23,8 +23,11 @@ EXPIRY = dt.timedelta(hours=6)
 BATCH_GAP = dt.timedelta(seconds=90)
 BATCH_MAX_AGE = dt.timedelta(minutes=10)
 LEARN_GRACE = dt.timedelta(minutes=30)
+CHOICE_TTL = dt.timedelta(minutes=10)  # an unanswered book question / title wait expires
 SUGGEST_RATIO = 0.8
 CAPTION_RATIO = 0.9
+
+log = logging.getLogger(__name__)
 
 MIME_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
             "image/heic": ".heic", "image/heif": ".heif"}
@@ -252,9 +255,30 @@ def _result(b: dict, ocr: str | None) -> dict:
             "dupes": b["dupes"], "ocr": ocr or "done"}
 
 
+def _duplicate(slug: str, dupes: int = 1) -> dict:
+    return {"status": "duplicate", "batch_id": None, "slug": slug, "count": 0, "dupes": dupes, "ocr": None}
+
+
+def _choice_open(st: dict, now: dt.datetime) -> bool:
+    """A book question is waiting for CR's answer (10 min): photos must not use the old book."""
+    pc = st["ui"].get("pending_choice")
+    at = S.parse((pc or {}).get("at"))
+    return bool(at) and now - at <= CHOICE_TTL
+
+
+def pending_choice(now: dt.datetime | None = None) -> dict | None:
+    now = _now(now)
+    with S.LOCK:
+        st = S.load()
+    return dict(st["ui"]["pending_choice"]) if _choice_open(st, now) else None
+
+
 def add_photo(file_bytes: bytes, filename: str, mime: str, *, caption: str = "",
               media_group_id: str | None = None, now: dt.datetime | None = None) -> dict:
-    """Caption book > current book > holding.  Returns status ``attached`` or ``held``."""
+    """Caption book > current book > holding.  Status ``attached`` / ``held`` / ``duplicate``.
+
+    While a book question is open (``ui.pending_choice``) the current book is ignored.
+    """
     now = _now(now)
     ext = _ext(filename, mime)
     with S.edit() as st:
@@ -266,13 +290,17 @@ def add_photo(file_bytes: bytes, filename: str, mime: str, *, caption: str = "",
             book, meta = album["book"], album["meta"]
         via_current = False
         if book is None:
-            cb = st["current_book"] if _fresh(st["current_book"], now) else None
+            fresh = _fresh(st["current_book"], now) and not _choice_open(st, now)
+            cb = st["current_book"] if fresh else None
             if cb is None:
                 return _hold(st, file_bytes, ext, caption, media_group_id, meta, now)
             book, via_current = {"slug": cb["slug"], "title": cb["title"]}, True
             cb["last_at"] = S.iso(now)
-        b = _pick_batch(st, book["slug"], now, media_group_id) or _new_batch(
-            st, book["slug"], book["title"], now, via_current=via_current, mgid=media_group_id)
+        b = _pick_batch(st, book["slug"], now, media_group_id)
+        if b is None and hashlib.sha256(file_bytes).hexdigest() in _known_shas(book["slug"]):
+            return _duplicate(book["slug"])  # never open a batch just for a duplicate
+        if b is None:
+            b = _new_batch(st, book["slug"], book["title"], now, via_current=via_current, mgid=media_group_id)
         ocr = _attach(st, b, file_bytes, ext, meta, now)
         _touch_recent(st, book["slug"], book["title"], now)
         return _result(b, ocr)
@@ -297,25 +325,46 @@ def holding_count() -> int:
 
 
 def resolve_holding(slug: str, title: str, now: dt.datetime | None = None) -> dict:
-    """Attach everything in holding to one book (as one new batch) and make it the current book."""
+    """Attach everything in holding to one book (as one new batch) and make it the current book.
+
+    Each photo is handled on its own: a failure leaves that photo in holding.  Progress is
+    saved even if something unexpected escapes, and holding files are deleted only after
+    the state that no longer lists them has been saved.
+    """
     now = _now(now)
-    with S.edit() as st:
-        items, st["holding"] = st["holding"], []
-        if not items:
+    done_paths: list[Path] = []
+    failed = 0
+    with S.edit(save_on_error=True) as st:
+        if not st["holding"]:
             return {"status": "empty", "batch_id": None, "slug": slug, "count": 0, "dupes": 0, "ocr": None}
         ensure_book(slug, title)
         b = _new_batch(st, slug, title, now, via_current=True, mgid=None)
         ocr = None
-        for h in items:
+        for h in list(st["holding"]):
             p = Path(h["path"])
-            if not p.is_file():
+            try:
+                if p.is_file():
+                    o = _attach(st, b, p.read_bytes(), h.get("ext") or p.suffix, h.get("meta") or {}, now)
+                    ocr = "pending" if "pending" in (ocr, o) else (o or ocr)
+            except Exception as e:  # noqa: BLE001 - keep the photo in holding, go on with the rest
+                log.warning("보류함 사진 붙이기 실패(보류함에 남김): %s", e)
+                failed += 1
                 continue
-            o = _attach(st, b, p.read_bytes(), h.get("ext") or p.suffix, h.get("meta") or {}, now)
-            ocr = "pending" if "pending" in (ocr, o) else (o or ocr)
-            p.unlink(missing_ok=True)
+            st["holding"].remove(h)
+            done_paths.append(p)
         st["current_book"] = {"slug": slug, "title": title, "set_at": S.iso(now), "last_at": S.iso(now)}
+        st["ui"].pop("pending_choice", None)
         _touch_recent(st, slug, title, now)
-        return _result(b, ocr)
+        if not b["files"]:  # all duplicates (or all failed): no empty batch
+            st["batches"].remove(b)
+            res = _duplicate(slug, b["dupes"]) if not failed else {
+                "status": "failed", "batch_id": None, "slug": slug, "count": 0, "dupes": b["dupes"], "ocr": None}
+        else:
+            res = _result(b, ocr)
+        res["failed"] = failed
+    for p in done_paths:  # state no longer points at them: now it is safe to delete
+        p.unlink(missing_ok=True)
+    return res
 
 
 def discard_holding() -> int:
@@ -361,84 +410,65 @@ def confirm_batch(batch_id: str) -> bool:
     return False
 
 
-def _forget(slug: str, filename: str) -> None:
-    """Drop one file from catalog / graph / OCR queue (hooks are added by Task 3 and ocr.py)."""
-    forget = getattr(catalog, "forget", None)
-    if forget:
-        forget(slug, filename)
-    remove_node = getattr(graph, "remove_node", None)
-    if remove_node:
-        remove_node("src:" + catalog.make_id(slug, filename)[:16])
-
-
-def _ocr_module():
-    try:
-        from . import ocr  # noqa: PLC0415 - optional until Task 1 lands
-        return ocr
-    except ImportError:
-        return None
-
-
-def _ocr_pending_entry(slug: str, filename: str) -> dict | None:
-    ocr = _ocr_module()
-    lister = getattr(ocr, "list_pending", None) if ocr else None
-    if not lister:
-        return None
-    eid = catalog.make_id(slug, filename)
-    entry = next((e for e in lister() if e.get("id") == eid), None)
-    if entry and getattr(ocr, "remove_pending", None):
-        ocr.remove_pending(eid)
-    return entry
+# file / hook helpers live in intake_state (keeps this module small)
+_forget = S.forget_file
+_ocr_module = S.ocr_module
+_ocr_pending_entry = S.take_ocr_pending
+_move_files = S.move_files
+_rehome = S.rehome
 
 
 def move_batch(batch_id: str, new_slug: str, new_title: str | None = None) -> dict:
-    """Move every file of a batch to another book (re-registered there, new catalog ids)."""
-    with S.edit() as st:
+    """Move every file of a batch to another book (re-registered there, new catalog ids).
+
+    Files are moved one by one.  If some fail, they stay in the old book as a separate batch,
+    and the state is saved even when something unexpected escapes.
+    """
+    with S.edit(save_on_error=True) as st:
         b = next((x for x in st["batches"] if x["id"] == batch_id), None)
         if b is None:
             return {"ok": False, "reason": "unknown_batch"}
         old = b["slug"]
         new_title = new_title or book_title(new_slug)
         if old == new_slug:
-            return {"ok": True, "moved": 0, "dupes": 0, "from": old, "to": new_slug}
+            return {"ok": True, "moved": 0, "dupes": 0, "failed": 0, "from": old, "to": new_slug}
         ensure_book(new_slug, new_title)
         src_dir, dst_dir = store.raw_dir(old), store.raw_dir(new_slug)
         target_shas = _known_shas(new_slug)
-        kept, moved, dupes = [], 0, 0
+        moved, failed, dupes = [], [], 0
         for f in b["files"]:
-            pend = _ocr_pending_entry(old, f["file"])
-            _forget(old, f["file"])
-            img, md = src_dir / f["file"], src_dir / f["md"]
-            if f["sha256"] in target_shas:
-                img.unlink(missing_ok=True)
-                md.unlink(missing_ok=True)
+            if f["sha256"] in target_shas:  # already in the target book: drop this copy
+                _ocr_pending_entry(old, f["file"])
+                _forget(old, f["file"])
+                (src_dir / f["file"]).unlink(missing_ok=True)
+                (src_dir / f["md"]).unlink(missing_ok=True)
                 dupes += 1
                 continue
-            new_img, new_md = dst_dir / f["file"], dst_dir / f["md"]
-            if img.is_file():
-                shutil.move(str(img), str(new_img))
-            if md.is_file():
-                meta, body = store.read_md(md)
-                meta["book"] = new_slug
-                store.write_md(new_md, meta, body)
-                md.unlink()
-            catalog.register(new_slug, f["file"], new_md, f["sha256"])
-            ocr = _ocr_module()
-            if pend and ocr and getattr(ocr, "add_pending", None):
-                ocr.add_pending({**pend, "id": catalog.make_id(new_slug, f["file"]), "book": new_slug,
-                                 "path": str(new_md), "image": str(new_img)})
-            kept.append(f)
-            moved += 1
-        b.update(slug=new_slug, title=new_title, files=kept, dupes=b["dupes"] + dupes)
+            try:
+                _move_files(f, src_dir, dst_dir, new_slug)
+            except Exception as e:  # noqa: BLE001 - this photo stays in the old book
+                log.warning("사진 옮기기 실패(원래 책에 남김): %s", e)
+                failed.append(f)
+                continue
+            _rehome(old, new_slug, f, dst_dir)
+            moved.append(f)
+        if not moved and not dupes:
+            return {"ok": False, "reason": "failed", "moved": 0, "dupes": 0, "failed": len(failed),
+                    "from": old, "to": new_slug}
+        if failed:  # what could not move stays where it is, as its own batch
+            rest = _new_batch(st, old, b["title"], S.now_seoul(), via_current=b.get("via_current", False),
+                              mgid=None)
+            rest["files"] = failed
+        b.update(slug=new_slug, title=new_title, files=moved, dupes=b["dupes"] + dupes)
         switched = False
         cb = st["current_book"]
-        if b.get("via_current") and cb and cb["slug"] == old:
+        if moved and b.get("via_current") and cb and cb["slug"] == old:
             cb.update(slug=new_slug, title=new_title)
             switched = True
         _touch_recent(st, new_slug, new_title, S.now_seoul())
     index.rebuild()
-    return {"ok": True, "moved": moved, "dupes": dupes, "from": old, "to": new_slug,
-            "current_switched": switched}
+    return {"ok": True, "moved": len(moved), "dupes": dupes, "failed": len(failed), "from": old,
+            "to": new_slug, "current_switched": switched}
 
 
 def delete_batch(batch_id: str) -> dict:

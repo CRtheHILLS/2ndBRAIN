@@ -242,3 +242,108 @@ def test_recent_books_and_summary(env):
     s = intake.summary()
     assert s["books"][0] == {"slug": "창세기", "title": "창세기", "count": 1}
     assert s["unclassified"] == 1 and s["holding"] == 0
+
+
+# --- review fixes -------------------------------------------------------------
+
+def test_open_book_question_holds_photos_even_with_fresh_current(env):
+    intake.set_current("손자병법", "손자병법", now=T0)
+    S.ui_set("pending_choice", {"at": S.iso(at(10)), "kind": "new"})
+    r = intake.add_photo(img(1), "", "image/jpeg", now=at(20))
+    assert r["status"] == "held" and env["calls"] == []
+    r = intake.add_photo(img(2), "", "image/jpeg", now=at(10 + 601))  # question older than 10 min
+    assert r["status"] == "attached" and r["slug"] == "손자병법"
+
+
+def test_move_partial_failure_keeps_state_and_disk_in_sync(env, monkeypatch):
+    intake.set_current("손자병법", "손자병법", now=T0)
+    r = intake.add_photo(img(1), "", "image/jpeg", now=at(1))
+    intake.add_photo(img(2), "", "image/jpeg", now=at(2))
+    real_move, n = S.shutil.move, {"calls": 0}
+
+    def flaky_move(src, dst):
+        n["calls"] += 1
+        if n["calls"] == 2:
+            raise OSError("disk hiccup")
+        return real_move(src, dst)
+
+    monkeypatch.setattr(S.shutil, "move", flaky_move)
+    out = intake.move_batch(r["batch_id"], "창세기")
+    assert out["ok"] and out["moved"] == 1 and out["failed"] == 1
+    assert intake.book_count("창세기") == 1 and intake.book_count("손자병법") == 1
+    batches = {b["slug"]: b for b in S.load()["batches"]}
+    assert len(batches["창세기"]["files"]) == 1 and len(batches["손자병법"]["files"]) == 1
+    left = batches["손자병법"]["files"][0]
+    assert (store.raw_dir("손자병법") / left["file"]).is_file()
+    assert (store.raw_dir("손자병법") / left["md"]).is_file()
+
+
+def test_edit_saves_progress_on_error_when_asked(env):
+    with pytest.raises(RuntimeError):
+        with S.edit(save_on_error=True) as st:
+            st["batch_seq"] = 42
+            raise RuntimeError("boom")
+    assert S.load()["batch_seq"] == 42
+    with pytest.raises(RuntimeError):
+        with S.edit() as st:
+            st["batch_seq"] = 7
+            raise RuntimeError("boom")
+    assert S.load()["batch_seq"] == 42
+
+
+def test_resolve_holding_partial_failure_and_delete_after_save(env, monkeypatch):
+    intake.add_photo(img(1), "", "image/jpeg", now=T0)
+    intake.add_photo(img(2), "", "image/jpeg", now=at(1))
+    paths = [Path(h["path"]) for h in S.load()["holding"]]
+    real_ingest, events = ingest.ingest_file, []
+
+    def flaky(slug, filename, data, extra_meta=None):
+        if data == img(2):
+            raise OSError("ocr crashed")
+        return real_ingest(slug, filename, data, extra_meta)
+
+    real_save, real_unlink = S.save, Path.unlink
+
+    def logged_unlink(self, missing_ok=False):
+        events.append(("unlink", self))
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(ingest, "ingest_file", flaky)
+    monkeypatch.setattr(S, "save", lambda st: events.append("save") or real_save(st))
+    monkeypatch.setattr(Path, "unlink", logged_unlink)
+    r = intake.resolve_holding("창세기", "창세기", now=at(5))
+    assert r["count"] == 1 and r["failed"] == 1
+    assert intake.holding_count() == 1 and S.load()["holding"][0]["path"] == str(paths[1])
+    assert not paths[0].exists() and paths[1].exists()
+    first_unlink = next(i for i, e in enumerate(events) if e != "save" and e[1] == paths[0])
+    assert "save" in events[:first_unlink]
+
+
+def test_all_duplicate_photos_open_no_batch(env):
+    intake.set_current("손자병법", "손자병법", now=T0)
+    intake.add_photo(img(1), "", "image/jpeg", now=at(1))
+    r = intake.add_photo(img(1), "", "image/jpeg", now=at(500))
+    assert r["status"] == "duplicate" and r["batch_id"] is None and r["dupes"] == 1
+    assert len(S.load()["batches"]) == 1
+    with S.edit() as st:
+        st["current_book"] = None
+    intake.add_photo(img(1), "", "image/jpeg", now=at(600))
+    r = intake.resolve_holding("손자병법", "손자병법", now=at(601))
+    assert r["status"] == "duplicate" and len(S.load()["batches"]) == 1
+
+
+def test_move_skips_register_when_md_missing(env):
+    intake.set_current("손자병법", "손자병법", now=T0)
+    r = intake.add_photo(img(1), "", "image/jpeg", now=at(1))
+    f = intake.get_batch(r["batch_id"])["files"][0]
+    (store.raw_dir("손자병법") / f["md"]).unlink()
+    assert intake.move_batch(r["batch_id"], "창세기")["moved"] == 1
+    assert not any(i["book"] == "창세기" for i in catalog.queued())
+
+
+def test_live_button_keys_survive_trimming(env):
+    (live,) = S.register_buttons([{"a": "ok", "batch": "b1"}])
+    with S.edit() as st:
+        st["batches"].append({"id": "b1", "kb": {"inline_keyboard": [[{"text": "ok", "callback_data": live}]]}})
+    S.register_buttons([{"a": "x"}] * (S.MAX_BUTTONS + 50))
+    assert S.button(live) == {"a": "ok", "batch": "b1", "g": 1}
