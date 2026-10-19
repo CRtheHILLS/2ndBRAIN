@@ -78,6 +78,9 @@ def ocr_image(data: bytes, mime: str) -> str:
         raise OcrUnavailable(["OCR을 쓸 수 있는 제공자가 없어요"])
     reasons = []
     for p in chain:
+        if not getattr(s, f"{p}_api_key", ""):
+            reasons.append(f"{p}: 키 없음")
+            continue
         t0 = time.monotonic()
         try:
             text, model, tin, tout = (_gemini_ocr if p == "gemini" else _anthropic_ocr)(data, mime)

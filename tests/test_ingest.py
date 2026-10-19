@@ -10,7 +10,13 @@ def test_text_passthrough(data_dir):
     meta, body = store.read_md(p)
     assert meta["kind"] == "text" and "우주는 넓다" in body
 
+def _anthropic_key(monkeypatch):
+    from brain.config import get_settings
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    get_settings.cache_clear()
+
 def test_image_uses_ocr(data_dir, monkeypatch):
+    _anthropic_key(monkeypatch)
     monkeypatch.setattr(ingest.llm, "ocr_image", lambda b, m: "OCR 결과 ==밑줄==")
     p = ingest.ingest_file("cosmos", "IMG_1.jpg", b"\xff\xd8fake")
     assert "==밑줄==" in store.read_md(p)[1]
@@ -43,6 +49,7 @@ def test_empty_filename_rejected(data_dir):
         ingest.ingest_file("cosmos", "", b"x")
 
 def test_raw_bytes_written_before_llm_call(data_dir, monkeypatch):
+    _anthropic_key(monkeypatch)
     def _boom(b, m):
         raise RuntimeError("llm exploded")
     monkeypatch.setattr(ingest.llm, "ocr_image", _boom)
@@ -62,6 +69,7 @@ def test_to_jpeg_converts_png_bytes_to_jpeg_magic_bytes(data_dir):
     assert out[:2] == b"\xff\xd8"
 
 def test_pdf_ingest_extracts_text_and_ocrs_blank_page(data_dir, monkeypatch):
+    _anthropic_key(monkeypatch)
     calls = []
     monkeypatch.setattr(ingest.llm, "ocr_image", lambda b, m: (calls.append(1), "OCR")[1])
     doc = pymupdf.open()

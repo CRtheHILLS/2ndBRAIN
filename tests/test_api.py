@@ -507,3 +507,23 @@ def test_ocr_flow_pending_file_submit(data_dir, monkeypatch):
         r = c.post(f"/ocr/{eid}", headers=h, json={"text": "읽은 글"})
         assert r.status_code == 200 and r.json()["ocr"] == "done"
         assert c.get("/ocr/pending", headers=h).json() == []
+
+def test_ocr_submit_rejects_blank_text(data_dir, monkeypatch):
+    from api.main import app
+    h = {"X-Brain-Token": "test-token"}
+    with TestClient(app) as c:
+        _, q = _pending_upload(c, monkeypatch)
+        r = c.post(f"/ocr/{q[0]['id']}", headers=h, json={"text": "   \n"})
+        assert r.status_code == 400
+        assert len(c.get("/ocr/pending", headers=h).json()) == 1
+
+
+def test_ocr_file_outside_data_dir_is_404(data_dir, monkeypatch, tmp_path_factory):
+    from brain import ocr
+    from api.main import app
+    outside = tmp_path_factory.mktemp("out") / "secret.jpg"
+    outside.write_bytes(b"secret")
+    ocr.add_pending({"book": "b", "file": "secret.jpg", "path": "x", "image": str(outside), "mime": "image/jpeg"})
+    with TestClient(app) as c:
+        eid = ocr.list_pending()[0]["id"]
+        assert c.get(f"/ocr/file/{eid}", headers={"X-Brain-Token": "test-token"}).status_code == 404

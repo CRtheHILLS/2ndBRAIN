@@ -658,13 +658,16 @@ def ocr_pending():
 @app.get("/ocr/file/{entry_id}", dependencies=[Depends(require_token)])
 def ocr_file(entry_id: str):
     entry = next((r for r in ocr.list_pending() if r["id"] == entry_id), None)
-    if entry is None or not Path(entry["image"]).is_file():
+    img = Path(entry["image"]).resolve() if entry else None
+    if img is None or not img.is_file() or not img.is_relative_to(get_settings().data_dir.resolve()):
         raise HTTPException(404, "읽을 파일을 찾지 못했어요")
-    return FileResponse(entry["image"], media_type=entry.get("mime") or "application/octet-stream")
+    return FileResponse(str(img), media_type=entry.get("mime") or "application/octet-stream")
 
 
 @app.post("/ocr/{entry_id}", dependencies=[Depends(require_token)])
 def ocr_submit(entry_id: str, body: OcrText):
+    if not body.text.strip():
+        raise HTTPException(400, "글자가 비어 있어요")
     try:
         entry = ocr.complete(entry_id, body.text)
     except KeyError:

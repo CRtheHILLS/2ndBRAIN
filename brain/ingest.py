@@ -145,10 +145,16 @@ def ingest_file(slug: str, filename: str, data: bytes, extra_meta: dict | None =
     sha = hashlib.sha256(data).hexdigest()
     ext = Path(filename).suffix.lower()
     out = store.raw_dir(slug) / (Path(filename).stem + ".md")
+    prior: dict = {}
     if out.exists() and store.read_md(out)[0].get("sha256") == sha:
-        if store.read_md(out)[0].get("ocr") != "pending":
+        old = store.read_md(out)[0]
+        if old.get("ocr") != "pending":
             _catalog_register(slug, filename, out, sha)
-        return out
+            return out
+        eid = catalog.make_id(slug, filename)
+        if any(r["id"] == eid for r in ocr.list_pending()):
+            return out
+        prior = old  # pending md lost its queue entry: retry OCR and re-queue
     (store.raw_dir(slug) / filename).write_bytes(data)  # keep original, before any llm call
     ocr_state, pending_mime = "none", None
     if ext in HEIC_EXTS or ext in IMG:
@@ -173,9 +179,9 @@ def ingest_file(slug: str, filename: str, data: bytes, extra_meta: dict | None =
         kind, body = "doc", _docx_body(data)
     else:
         kind, body = "text", _decode_text(data)
-    meta = {"book": slug, "source": filename, "sha256": sha, "kind": kind, "ocr": ocr_state,
+    core = {"book": slug, "source": filename, "sha256": sha, "kind": kind, "ocr": ocr_state,
             "ingested_at": dt.datetime.now().isoformat(timespec="seconds")}
-    meta.update(extra_meta or {})
+    meta = {**prior, **(extra_meta or {}), **core}  # core keys always win
     store.write_md(out, meta, body)
     if ocr_state == "pending":
         ocr.add_pending({"id": catalog.make_id(slug, filename), "book": slug, "file": filename,
