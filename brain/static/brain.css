@@ -9,3 +9,64 @@ blockquote{border-left:4px solid var(--accent);margin:1rem 0;padding:.2rem 1rem;
 mark{background:#ffe08a}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:.4rem}
 .shelf{display:grid;gap:1rem;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}.book{display:block;background:var(--card);padding:1rem;border-radius:12px;text-decoration:none;color:inherit}
 .book span{display:block;color:var(--muted);font-size:.85rem}.sub{color:var(--muted)}
+.quests{padding-bottom:1.5rem}.quests h2{margin:.2rem 0 .8rem}
+
+/* --- quest pages (mobile first) --- */
+:root{--line:rgba(0,0,0,.1);--g-ok:#2e7d32;--g-ok-bg:#e6f4e7;--g-wip:#1565c0;--g-wip-bg:#e3eefb;--g-guess:#8a5a00;--g-guess-bg:#fff1d6;--g-hype:#c62828;--g-hype-bg:#fde7e7}
+@media(prefers-color-scheme:dark){:root{--line:rgba(255,255,255,.14);--g-ok:#8fd694;--g-ok-bg:#1f3322;--g-wip:#8ab8f5;--g-wip-bg:#1c2a3d;--g-guess:#f3c56b;--g-guess-bg:#3a2e14;--g-hype:#ff9a9a;--g-hype-bg:#3d1d1d}}
+.quest{overflow-x:hidden}.quest header,.quest main,.quest footer{max-width:860px;margin:auto;padding-left:16px;padding-right:16px;box-sizing:border-box}
+.quest header{padding-top:1.5rem}.quest h1{font-size:1.6rem;line-height:1.35;word-break:keep-all}
+.quest main>section{margin:1rem 0}.quest h2{font-size:1.2rem;margin:0 0 .6rem}.quest h3{font-size:1.05rem;margin:.8rem 0 .3rem}
+.quest a{color:var(--accent)}.quest footer{padding-bottom:3rem}
+.kicker{margin:.8rem 0 0;color:var(--muted);font-size:.9rem;font-weight:600}.goal{font-size:1.1rem;margin:.4rem 0 0}.muted{color:var(--muted)}
+.band{margin:1.6rem 0 .8rem}
+.dots{display:grid;gap:1rem;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
+.dot{background:var(--card);border-radius:16px;padding:1.2rem;box-shadow:0 6px 24px rgba(0,0,0,.06);min-width:0}
+.dot h3{margin:.4rem 0;display:flex;flex-wrap:wrap;align-items:center;gap:.4rem}.dot p{margin:.4rem 0}
+.dot .one-line{font-weight:600}.dot .src{font-size:.85rem;color:var(--muted)}
+.pic{margin:0;text-align:center}.pic svg{display:block;width:100%;max-width:100%;height:auto;max-height:180px}
+.pic .emoji{font-size:3rem;line-height:1.3}
+.grade{font-size:.75rem;font-weight:700;border-radius:999px;padding:.1rem .6rem;white-space:nowrap}
+.grade-확립됨{color:var(--g-ok);background:var(--g-ok-bg)}.grade-연구중{color:var(--g-wip);background:var(--g-wip-bg)}
+.grade-추측{color:var(--g-guess);background:var(--g-guess-bg)}.grade-상술,.grade.nosrc{color:var(--g-hype);background:var(--g-hype-bg)}
+.quiz details{border:1px solid var(--line);border-radius:12px;padding:.6rem .9rem;margin:.6rem 0}
+.quiz summary{cursor:pointer;font-weight:600}.quiz details[open] summary{color:var(--accent)}.quiz details p{margin:.5rem 0 0}
+.say{border-left:4px solid var(--accent)}.clair{background:linear-gradient(135deg,var(--card),var(--bg))}
+.day-nav{display:flex;justify-content:space-between;gap:1rem;margin:1rem 0;flex-wrap:wrap}
+.day-nav a{border:1px solid var(--accent);border-radius:999px;padding:.35rem .9rem;text-decoration:none}
+.honesty ul{margin:.2rem 0 .6rem;padding-left:1.2rem}
+.progress{margin:0 0 .4rem}progress{width:100%;accent-color:var(--accent)}
+.path{list-style:none;margin:1rem 0 0;padding:0}
+.path li{position:relative;display:flex;gap:.8rem;padding:0 0 1rem}
+.path li:not(:last-child)::before{content:"";position:absolute;left:15px;top:32px;bottom:0;border-left:2px dashed var(--line)}
+.path .step{flex:0 0 32px;height:32px;border-radius:50%;display:grid;place-items:center;font-weight:700;border:2px solid var(--accent);color:var(--accent);background:var(--card)}
+.path li.ready .step{background:var(--accent);color:#fff}.path li.todo{color:var(--muted)}
+.path small{display:block;color:var(--muted)}
+.table-wrap{overflow-x:auto}.table-wrap table{font-size:.9rem}.table-wrap th{text-align:left;white-space:nowrap}
+.quest td,.quest th{border-bottom:1px solid var(--line);vertical-align:top}
+@media(min-width:640px){.quest h1{font-size:2rem}.quest header,.quest main,.quest footer{padding-left:1.5rem;padding-right:1.5rem}}
+
+/* --- brain graph page --- */
+body.brain{overflow-x:hidden}
+.brain-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:.8rem;max-width:none;padding:1rem 16px .4rem}
+.brain-head h1{font-size:1.4rem;margin:0}.brain-back{color:var(--accent);text-decoration:none}
+.brain-controls{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;padding:.4rem 16px}
+.brain-controls[hidden],.brain-wrap[hidden],.brain-panel[hidden],.brain-note[hidden]{display:none}
+.brain-controls input[type=search]{flex:1 1 180px;min-width:0;padding:.4rem .8rem;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);font:inherit}
+.chip{display:inline-flex;align-items:center;gap:.3rem;border:1px solid var(--line);border-radius:999px;padding:.15rem .7rem;font-size:.85rem;background:var(--card);cursor:pointer}
+.swatch{display:inline-block;width:.8rem;height:.8rem;border-radius:50%}
+.brain-count{color:var(--muted);font-size:.85rem}
+.brain-legend{display:flex;flex-wrap:wrap;gap:.35rem;width:100%}
+.brain-note{margin:1rem 16px;padding:1rem;background:var(--card);border-radius:12px;border-left:4px solid var(--accent)}
+.brain-wrap{position:relative;margin:.4rem 0 0}
+.brain-wrap svg{display:block;width:100%;background:var(--card);touch-action:none}
+.lk{stroke:var(--muted);stroke-opacity:.35;stroke-width:1}
+.lk-related{stroke-opacity:.3;stroke-width:.8}.lk-other{stroke-opacity:.5}
+.lk-bridge{stroke:var(--accent);stroke-opacity:.9;stroke-width:1.8;stroke-dasharray:5 3}
+.brain-wrap circle{cursor:pointer;stroke:var(--bg);stroke-width:1}
+.nl{fill:var(--ink);font-size:11px;text-anchor:middle;pointer-events:none;paint-order:stroke;stroke:var(--card);stroke-width:3px}
+.brain-panel{position:fixed;left:0;right:0;bottom:0;max-height:55vh;overflow:auto;box-sizing:border-box;padding:1rem 16px 1.5rem;background:var(--card);border-top:2px solid var(--accent);border-radius:16px 16px 0 0;box-shadow:0 -6px 24px rgba(0,0,0,.18);z-index:5}
+.brain-panel h2{font-size:1.2rem;margin:0 2rem .2rem 0}.brain-panel h3{font-size:1rem;margin:.8rem 0 .2rem}
+.brain-panel ul{margin:0;padding-left:1.2rem}.brain-panel a{color:var(--accent)}.brain-panel p{margin:.3rem 0}
+.brain-close{position:absolute;top:.5rem;right:.8rem;border:0;background:transparent;color:var(--ink);font-size:1.2rem;cursor:pointer}
+@media(min-width:760px){.brain-panel{left:auto;top:0;bottom:0;width:340px;max-height:none;border-top:0;border-left:2px solid var(--accent);border-radius:0;box-shadow:-6px 0 24px rgba(0,0,0,.12)}}

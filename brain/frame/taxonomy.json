@@ -1,0 +1,1075 @@
+{
+ "version": 1,
+ "status": "draft",
+ "areas": [
+  {
+   "code": "A",
+   "name_ko": "수학",
+   "name_en": "Mathematics",
+   "fields": [
+    {
+     "code": "A1",
+     "name_ko": "논리·집합(형식논리)",
+     "name_en": "Logic & Sets",
+     "deprecated_to": null,
+     "note": "언어철학은 K4"
+    },
+    {
+     "code": "A2",
+     "name_ko": "대수",
+     "name_en": "Algebra",
+     "deprecated_to": null
+    },
+    {
+     "code": "A3",
+     "name_ko": "기하·위상",
+     "name_en": "Geometry & Topology",
+     "deprecated_to": null
+    },
+    {
+     "code": "A4",
+     "name_ko": "해석·미적분",
+     "name_en": "Analysis & Calculus",
+     "deprecated_to": null
+    },
+    {
+     "code": "A5",
+     "name_ko": "확률·통계(이론)",
+     "name_en": "Probability & Statistics",
+     "deprecated_to": null,
+     "note": "사회조사 데이터는 I7"
+    },
+    {
+     "code": "A6",
+     "name_ko": "이산수학·조합",
+     "name_en": "Discrete Math & Combinatorics",
+     "deprecated_to": null
+    },
+    {
+     "code": "A7",
+     "name_ko": "수론",
+     "name_en": "Number Theory",
+     "deprecated_to": null
+    },
+    {
+     "code": "A8",
+     "name_ko": "응용·수리모델링",
+     "name_en": "Applied Math & Modeling",
+     "deprecated_to": null
+    },
+    {
+     "code": "A9",
+     "name_ko": "수학사·수학철학",
+     "name_en": "History & Philosophy of Math",
+     "deprecated_to": null
+    }
+   ]
+  },
+  {
+   "code": "B",
+   "name_ko": "물리·우주",
+   "name_en": "Physics & Space",
+   "fields": [
+    {
+     "code": "B1",
+     "name_ko": "고전역학",
+     "name_en": "Classical Mechanics",
+     "deprecated_to": null
+    },
+    {
+     "code": "B2",
+     "name_ko": "열·통계",
+     "name_en": "Thermal & Statistical Physics",
+     "deprecated_to": null
+    },
+    {
+     "code": "B3",
+     "name_ko": "전자기",
+     "name_en": "Electromagnetism",
+     "deprecated_to": null
+    },
+    {
+     "code": "B4",
+     "name_ko": "양자",
+     "name_en": "Quantum",
+     "deprecated_to": null
+    },
+    {
+     "code": "B5",
+     "name_ko": "상대성·우주",
+     "name_en": "Relativity & Cosmology",
+     "deprecated_to": null
+    },
+    {
+     "code": "B6",
+     "name_ko": "유체·음향",
+     "name_en": "Fluids & Acoustics",
+     "deprecated_to": null,
+     "note": "물리 원리; 음향기기는 F10"
+    },
+    {
+     "code": "B7",
+     "name_ko": "입자·핵",
+     "name_en": "Particle & Nuclear Physics",
+     "deprecated_to": null
+    },
+    {
+     "code": "B8",
+     "name_ko": "응집물질·광학",
+     "name_en": "Condensed Matter & Optics",
+     "deprecated_to": null
+    },
+    {
+     "code": "B9",
+     "name_ko": "천문·행성",
+     "name_en": "Astronomy & Planetary Science",
+     "deprecated_to": null
+    }
+   ]
+  },
+  {
+   "code": "C",
+   "name_ko": "화학·재료",
+   "name_en": "Chemistry & Materials",
+   "fields": [
+    {
+     "code": "C1",
+     "name_ko": "일반·물리화학",
+     "name_en": "General & Physical Chemistry",
+     "deprecated_to": null
+    },
+    {
+     "code": "C2",
+     "name_ko": "무기화학",
+     "name_en": "Inorganic Chemistry",
+     "deprecated_to": null
+    },
+    {
+     "code": "C3",
+     "name_ko": "유기화학",
+     "name_en": "Organic Chemistry",
+     "deprecated_to": null
+    },
+    {
+     "code": "C4",
+     "name_ko": "분석화학",
+     "name_en": "Analytical Chemistry",
+     "deprecated_to": null
+    },
+    {
+     "code": "C5",
+     "name_ko": "고분자·플라스틱",
+     "name_en": "Polymers & Plastics",
+     "deprecated_to": null
+    },
+    {
+     "code": "C6",
+     "name_ko": "금속·세라믹",
+     "name_en": "Metals & Ceramics",
+     "deprecated_to": null
+    },
+    {
+     "code": "C7",
+     "name_ko": "나노·신소재",
+     "name_en": "Nanotech & Advanced Materials",
+     "deprecated_to": null
+    },
+    {
+     "code": "C8",
+     "name_ko": "전지·전기화학",
+     "name_en": "Batteries & Electrochemistry",
+     "deprecated_to": null,
+     "note": "에너지 정책은 E6, 발전·설비는 F9"
+    },
+    {
+     "code": "C9",
+     "name_ko": "화학공정·산업화학",
+     "name_en": "Chemical Engineering",
+     "deprecated_to": null
+    }
+   ]
+  },
+  {
+   "code": "D",
+   "name_ko": "생명·의학",
+   "name_en": "Life Sciences & Medicine",
+   "fields": [
+    {
+     "code": "D1",
+     "name_ko": "세포·분자",
+     "name_en": "Cell & Molecular Biology",
+     "deprecated_to": null
+    },
+    {
+     "code": "D2",
+     "name_ko": "유전",
+     "name_en": "Genetics",
+     "deprecated_to": null
+    },
+    {
+     "code": "D3",
+     "name_ko": "생리·해부",
+     "name_en": "Physiology & Anatomy",
+     "deprecated_to": null
+    },
+    {
+     "code": "D4",
+     "name_ko": "의학·치료",
+     "name_en": "Medicine & Therapy",
+     "deprecated_to": null
+    },
+    {
+     "code": "D5",
+     "name_ko": "노화·장수",
+     "name_en": "Aging & Longevity",
+     "deprecated_to": null
+    },
+    {
+     "code": "D6",
+     "name_ko": "미생물·감염·면역",
+     "name_en": "Microbiology, Infection & Immunity",
+     "deprecated_to": null
+    },
+    {
+     "code": "D7",
+     "name_ko": "진화·생태",
+     "name_en": "Evolution & Ecology",
+     "deprecated_to": null,
+     "note": "고생물·지구사는 E8, 동물 행동은 O3"
+    },
+    {
+     "code": "D8",
+     "name_ko": "식물·농학",
+     "name_en": "Botany & Agronomy",
+     "deprecated_to": null
+    },
+    {
+     "code": "D9",
+     "name_ko": "약학·약리",
+     "name_en": "Pharmacy & Pharmacology",
+     "deprecated_to": null,
+     "note": "식단·영양은 N2"
+    },
+    {
+     "code": "D10",
+     "name_ko": "공중보건·역학",
+     "name_en": "Public Health & Epidemiology",
+     "deprecated_to": null
+    }
+   ]
+  },
+  {
+   "code": "E",
+   "name_ko": "지구·환경",
+   "name_en": "Earth & Environment",
+   "fields": [
+    {
+     "code": "E1",
+     "name_ko": "지질·광물",
+     "name_en": "Geology & Minerals",
+     "deprecated_to": null
+    },
+    {
+     "code": "E2",
+     "name_ko": "기상·기후",
+     "name_en": "Meteorology & Climate",
+     "deprecated_to": null
+    },
+    {
+     "code": "E3",
+     "name_ko": "해양·수문",
+     "name_en": "Oceanography & Hydrology",
+     "deprecated_to": null
+    },
+    {
+     "code": "E4",
+     "name_ko": "지형·지리",
+     "name_en": "Geography & Landforms",
+     "deprecated_to": null
+    },
+    {
+     "code": "E5",
+     "name_ko": "환경오염·보전",
+     "name_en": "Pollution & Conservation",
+     "deprecated_to": null
+    },
+    {
+     "code": "E6",
+     "name_ko": "자원·에너지·환경정책",
+     "name_en": "Resources, Energy & Environmental Policy",
+     "deprecated_to": null
+    },
+    {
+     "code": "E7",
+     "name_ko": "재난·지진·화산",
+     "name_en": "Hazards, Earthquakes & Volcanoes",
+     "deprecated_to": null
+    },
+    {
+     "code": "E8",
+     "name_ko": "지구사·고생물",
+     "name_en": "Earth History & Paleontology",
+     "deprecated_to": null
+    }
+   ]
+  },
+  {
+   "code": "F",
+   "name_ko": "기술·공학",
+   "name_en": "Technology & Engineering",
+   "fields": [
+    {
+     "code": "F1",
+     "name_ko": "기계",
+     "name_en": "Mechanical",
+     "deprecated_to": null
+    },
+    {
+     "code": "F2",
+     "name_ko": "항공·우주공학",
+     "name_en": "Aerospace Engineering",
+     "deprecated_to": null
+    },
+    {
+     "code": "F3",
+     "name_ko": "전기전자",
+     "name_en": "Electrical & Electronic",
+     "deprecated_to": null
+    },
+    {
+     "code": "F4",
+     "name_ko": "토목·건축",
+     "name_en": "Civil & Architecture",
+     "deprecated_to": null,
+     "note": "건축미학 포함"
+    },
+    {
+     "code": "F5",
+     "name_ko": "제조·산업공학",
+     "name_en": "Manufacturing & Industrial",
+     "deprecated_to": null
+    },
+    {
+     "code": "F6",
+     "name_ko": "로봇·제어",
+     "name_en": "Robotics & Control",
+     "deprecated_to": null
+    },
+    {
+     "code": "F7",
+     "name_ko": "통신·신호",
+     "name_en": "Communications & Signal",
+     "deprecated_to": null
+    },
+    {
+     "code": "F8",
+     "name_ko": "교통·운송",
+     "name_en": "Transportation",
+     "deprecated_to": null
+    },
+    {
+     "code": "F9",
+     "name_ko": "에너지공학·발전",
+     "name_en": "Energy & Power Engineering",
+     "deprecated_to": null
+    },
+    {
+     "code": "F10",
+     "name_ko": "오디오·영상 기술(공학)",
+     "name_en": "Audio & Video Technology",
+     "deprecated_to": null,
+     "note": "창작 사운드디자인은 M2"
+    }
+   ]
+  },
+  {
+   "code": "G",
+   "name_ko": "정보·컴퓨팅",
+   "name_en": "Information & Computing",
+   "fields": [
+    {
+     "code": "G1",
+     "name_ko": "프로그래밍·언어",
+     "name_en": "Programming & Languages",
+     "deprecated_to": null
+    },
+    {
+     "code": "G2",
+     "name_ko": "알고리즘·자료구조",
+     "name_en": "Algorithms & Data Structures",
+     "deprecated_to": null
+    },
+    {
+     "code": "G3",
+     "name_ko": "시스템·OS·네트워크",
+     "name_en": "Systems, OS & Networks",
+     "deprecated_to": null
+    },
+    {
+     "code": "G4",
+     "name_ko": "데이터베이스·검색",
+     "name_en": "Databases & Retrieval",
+     "deprecated_to": null
+    },
+    {
+     "code": "G5",
+     "name_ko": "인공지능·머신러닝",
+     "name_en": "AI & Machine Learning",
+     "deprecated_to": null,
+     "note": "사용법·프롬프트는 Z4"
+    },
+    {
+     "code": "G6",
+     "name_ko": "보안·암호",
+     "name_en": "Security & Cryptography",
+     "deprecated_to": null
+    },
+    {
+     "code": "G7",
+     "name_ko": "웹·앱 개발",
+     "name_en": "Web & App Development",
+     "deprecated_to": null
+    },
+    {
+     "code": "G8",
+     "name_ko": "HCI·UX",
+     "name_en": "HCI & UX",
+     "deprecated_to": null
+    },
+    {
+     "code": "G9",
+     "name_ko": "컴퓨터과학 이론",
+     "name_en": "Theory of Computation",
+     "deprecated_to": null
+    },
+    {
+     "code": "G10",
+     "name_ko": "정보과학·도서관",
+     "name_en": "Information Science & Libraries",
+     "deprecated_to": null
+    }
+   ]
+  },
+  {
+   "code": "H",
+   "name_ko": "인간·마음·뇌",
+   "name_en": "Mind, Brain & Human",
+   "fields": [
+    {
+     "code": "H1",
+     "name_ko": "신경과학",
+     "name_en": "Neuroscience",
+     "deprecated_to": null
+    },
+    {
+     "code": "H2",
+     "name_ko": "인지·지각",
+     "name_en": "Cognition & Perception",
+     "deprecated_to": null
+    },
+    {
+     "code": "H3",
+     "name_ko": "학습·기억",
+     "name_en": "Learning & Memory",
+     "deprecated_to": null
+    },
+    {
+     "code": "H4",
+     "name_ko": "감정·동기",
+     "name_en": "Emotion & Motivation",
+     "deprecated_to": null
+    },
+    {
+     "code": "H5",
+     "name_ko": "발달·성격",
+     "name_en": "Development & Personality",
+     "deprecated_to": null
+    },
+    {
+     "code": "H6",
+     "name_ko": "임상·정신건강",
+     "name_en": "Clinical Psychology & Mental Health",
+     "deprecated_to": null
+    },
+    {
+     "code": "H7",
+     "name_ko": "사회심리",
+     "name_en": "Social Psychology",
+     "deprecated_to": null
+    },
+    {
+     "code": "H8",
+     "name_ko": "의식·꿈·주의",
+     "name_en": "Consciousness, Dreams & Attention",
+     "deprecated_to": null,
+     "note": "수면 습관은 N4"
+    },
+    {
+     "code": "H9",
+     "name_ko": "창의성·몰입",
+     "name_en": "Creativity & Flow",
+     "deprecated_to": null
+    }
+   ]
+  },
+  {
+   "code": "I",
+   "name_ko": "사회·경제·경영",
+   "name_en": "Society, Economy & Business",
+   "fields": [
+    {
+     "code": "I1",
+     "name_ko": "미시·거시경제",
+     "name_en": "Micro & Macro Economics",
+     "deprecated_to": null
+    },
+    {
+     "code": "I2",
+     "name_ko": "금융·투자",
+     "name_en": "Finance & Investing",
+     "deprecated_to": null
+    },
+    {
+     "code": "I3",
+     "name_ko": "경영·전략",
+     "name_en": "Management & Strategy",
+     "deprecated_to": null
+    },
+    {
+     "code": "I4",
+     "name_ko": "마케팅·브랜드",
+     "name_en": "Marketing & Branding",
+     "deprecated_to": null
+    },
+    {
+     "code": "I5",
+     "name_ko": "창업·산업",
+     "name_en": "Entrepreneurship & Industry",
+     "deprecated_to": null
+    },
+    {
+     "code": "I6",
+     "name_ko": "사회학·인류학",
+     "name_en": "Sociology & Anthropology",
+     "deprecated_to": null
+    },
+    {
+     "code": "I7",
+     "name_ko": "사회조사·데이터분석",
+     "name_en": "Social Survey & Data Analysis",
+     "deprecated_to": null
+    },
+    {
+     "code": "I8",
+     "name_ko": "노동·직업·조직",
+     "name_en": "Labor, Careers & Organizations",
+     "deprecated_to": null
+    },
+    {
+     "code": "I9",
+     "name_ko": "복지·불평등·인구",
+     "name_en": "Welfare, Inequality & Demography",
+     "deprecated_to": null
+    },
+    {
+     "code": "I10",
+     "name_ko": "미디어·커뮤니케이션",
+     "name_en": "Media & Communication",
+     "deprecated_to": null
+    }
+   ]
+  },
+  {
+   "code": "J",
+   "name_ko": "역사·고고",
+   "name_en": "History & Archaeology",
+   "fields": [
+    {
+     "code": "J1",
+     "name_ko": "한국사",
+     "name_en": "Korean History",
+     "deprecated_to": null
+    },
+    {
+     "code": "J2",
+     "name_ko": "동아시아사(중국·일본)",
+     "name_en": "East Asian History",
+     "deprecated_to": null
+    },
+    {
+     "code": "J3",
+     "name_ko": "서양사(유럽·북미)",
+     "name_en": "Western History",
+     "deprecated_to": null
+    },
+    {
+     "code": "J4",
+     "name_ko": "중동·이슬람사",
+     "name_en": "Middle Eastern & Islamic History",
+     "deprecated_to": null
+    },
+    {
+     "code": "J5",
+     "name_ko": "남아시아·동남아시아사",
+     "name_en": "South & Southeast Asian History",
+     "deprecated_to": null
+    },
+    {
+     "code": "J6",
+     "name_ko": "아프리카·아메리카·오세아니아사",
+     "name_en": "African, American & Oceanian History",
+     "deprecated_to": null
+    },
+    {
+     "code": "J7",
+     "name_ko": "고고학·유물",
+     "name_en": "Archaeology & Artifacts",
+     "deprecated_to": null
+    },
+    {
+     "code": "J8",
+     "name_ko": "세계사·문명교류",
+     "name_en": "World History & Cultural Exchange",
+     "deprecated_to": null
+    },
+    {
+     "code": "J9",
+     "name_ko": "과학기술사·경제사",
+     "name_en": "History of Science, Technology & Economy",
+     "deprecated_to": null
+    },
+    {
+     "code": "J10",
+     "name_ko": "사학사·역사이론",
+     "name_en": "Historiography & Theory of History",
+     "deprecated_to": null
+    }
+   ]
+  },
+  {
+   "code": "K",
+   "name_ko": "철학·종교",
+   "name_en": "Philosophy & Religion",
+   "fields": [
+    {
+     "code": "K1",
+     "name_ko": "형이상학·존재론",
+     "name_en": "Metaphysics & Ontology",
+     "deprecated_to": null
+    },
+    {
+     "code": "K2",
+     "name_ko": "과학철학·방법론",
+     "name_en": "Philosophy of Science & Methodology",
+     "deprecated_to": null
+    },
+    {
+     "code": "K3",
+     "name_ko": "윤리학",
+     "name_en": "Ethics",
+     "deprecated_to": null
+    },
+    {
+     "code": "K4",
+     "name_ko": "인식론·언어철학",
+     "name_en": "Epistemology & Philosophy of Language",
+     "deprecated_to": null
+    },
+    {
+     "code": "K5",
+     "name_ko": "동양철학",
+     "name_en": "Eastern Philosophy",
+     "deprecated_to": null
+    },
+    {
+     "code": "K6",
+     "name_ko": "서양철학사",
+     "name_en": "Western Philosophy",
+     "deprecated_to": null
+    },
+    {
+     "code": "K7",
+     "name_ko": "기독교",
+     "name_en": "Christianity",
+     "deprecated_to": null
+    },
+    {
+     "code": "K8",
+     "name_ko": "불교",
+     "name_en": "Buddhism",
+     "deprecated_to": null
+    },
+    {
+     "code": "K9",
+     "name_ko": "이슬람·유대교",
+     "name_en": "Islam & Judaism",
+     "deprecated_to": null
+    },
+    {
+     "code": "K10",
+     "name_ko": "힌두교·인도종교·기타 신화",
+     "name_en": "Hinduism, Indian Religions & Other Mythology",
+     "deprecated_to": null
+    }
+   ]
+  },
+  {
+   "code": "L",
+   "name_ko": "언어·문학",
+   "name_en": "Language & Literature",
+   "fields": [
+    {
+     "code": "L1",
+     "name_ko": "언어학",
+     "name_en": "Linguistics",
+     "deprecated_to": null
+    },
+    {
+     "code": "L2",
+     "name_ko": "한국어",
+     "name_en": "Korean Language",
+     "deprecated_to": null
+    },
+    {
+     "code": "L3",
+     "name_ko": "영어·외국어",
+     "name_en": "English & Foreign Languages",
+     "deprecated_to": null
+    },
+    {
+     "code": "L4",
+     "name_ko": "한국문학",
+     "name_en": "Korean Literature",
+     "deprecated_to": null
+    },
+    {
+     "code": "L5",
+     "name_ko": "세계문학",
+     "name_en": "World Literature",
+     "deprecated_to": null
+    },
+    {
+     "code": "L6",
+     "name_ko": "시·작사",
+     "name_en": "Poetry & Lyric Writing",
+     "deprecated_to": null
+    },
+    {
+     "code": "L7",
+     "name_ko": "글쓰기·수사",
+     "name_en": "Writing & Rhetoric",
+     "deprecated_to": null
+    },
+    {
+     "code": "L8",
+     "name_ko": "번역·통역",
+     "name_en": "Translation & Interpretation",
+     "deprecated_to": null
+    },
+    {
+     "code": "L9",
+     "name_ko": "서사·스토리텔링",
+     "name_en": "Narrative & Storytelling",
+     "deprecated_to": null
+    }
+   ]
+  },
+  {
+   "code": "M",
+   "name_ko": "예술·음악",
+   "name_en": "Arts & Music",
+   "fields": [
+    {
+     "code": "M1",
+     "name_ko": "작곡·음악이론",
+     "name_en": "Composition & Music Theory",
+     "deprecated_to": null
+    },
+    {
+     "code": "M2",
+     "name_ko": "편곡·사운드디자인",
+     "name_en": "Arrangement & Sound Design",
+     "deprecated_to": null
+    },
+    {
+     "code": "M3",
+     "name_ko": "연주·보컬",
+     "name_en": "Performance & Vocals",
+     "deprecated_to": null
+    },
+    {
+     "code": "M4",
+     "name_ko": "음악 산업·제작",
+     "name_en": "Music Industry & Production",
+     "deprecated_to": null
+    },
+    {
+     "code": "M5",
+     "name_ko": "음악사·장르",
+     "name_en": "Music History & Genres",
+     "deprecated_to": null
+    },
+    {
+     "code": "M6",
+     "name_ko": "미술·디자인",
+     "name_en": "Fine Art & Design",
+     "deprecated_to": null
+    },
+    {
+     "code": "M7",
+     "name_ko": "영화·공연",
+     "name_en": "Film & Performing Arts",
+     "deprecated_to": null
+    },
+    {
+     "code": "M8",
+     "name_ko": "사진·영상예술",
+     "name_en": "Photography & Visual Media Art",
+     "deprecated_to": null
+    },
+    {
+     "code": "M9",
+     "name_ko": "미학·예술이론",
+     "name_en": "Aesthetics & Art Theory",
+     "deprecated_to": null
+    },
+    {
+     "code": "M10",
+     "name_ko": "대중문화·K-POP",
+     "name_en": "Popular Culture & K-POP",
+     "deprecated_to": null
+    }
+   ]
+  },
+  {
+   "code": "N",
+   "name_ko": "생활·건강·운동",
+   "name_en": "Life, Health & Fitness",
+   "fields": [
+    {
+     "code": "N1",
+     "name_ko": "운동·피트니스",
+     "name_en": "Exercise & Fitness",
+     "deprecated_to": null
+    },
+    {
+     "code": "N2",
+     "name_ko": "영양·식단",
+     "name_en": "Diet & Nutrition",
+     "deprecated_to": null
+    },
+    {
+     "code": "N3",
+     "name_ko": "요리·음식문화",
+     "name_en": "Cooking & Food Culture",
+     "deprecated_to": null
+    },
+    {
+     "code": "N4",
+     "name_ko": "수면·휴식·웰빙",
+     "name_en": "Sleep, Rest & Wellbeing",
+     "deprecated_to": null
+    },
+    {
+     "code": "N5",
+     "name_ko": "스포츠",
+     "name_en": "Sports",
+     "deprecated_to": null
+    },
+    {
+     "code": "N6",
+     "name_ko": "집·가사·DIY·취미",
+     "name_en": "Home, DIY & Hobbies",
+     "deprecated_to": null
+    },
+    {
+     "code": "N7",
+     "name_ko": "여행·지리문화",
+     "name_en": "Travel & Geographic Culture",
+     "deprecated_to": null
+    },
+    {
+     "code": "N8",
+     "name_ko": "패션·뷰티",
+     "name_en": "Fashion & Beauty",
+     "deprecated_to": null
+    },
+    {
+     "code": "N9",
+     "name_ko": "가족·육아·관계",
+     "name_en": "Family, Parenting & Relationships",
+     "deprecated_to": null
+    },
+    {
+     "code": "N10",
+     "name_ko": "개인재무",
+     "name_en": "Personal Finance",
+     "deprecated_to": null,
+     "note": "생활법률은 P2"
+    }
+   ]
+  },
+  {
+   "code": "O",
+   "name_ko": "동물·반려",
+   "name_en": "Animals & Pets",
+   "fields": [
+    {
+     "code": "O1",
+     "name_ko": "개·고양이",
+     "name_en": "Dogs & Cats",
+     "deprecated_to": null
+    },
+    {
+     "code": "O2",
+     "name_ko": "기타 반려동물",
+     "name_en": "Other Pets",
+     "deprecated_to": null
+    },
+    {
+     "code": "O3",
+     "name_ko": "동물행동",
+     "name_en": "Animal Behavior",
+     "deprecated_to": null
+    },
+    {
+     "code": "O4",
+     "name_ko": "수의학·반려동물 건강",
+     "name_en": "Veterinary & Pet Health",
+     "deprecated_to": null,
+     "note": "사람 의학은 D4"
+    },
+    {
+     "code": "O5",
+     "name_ko": "야생동물·보전",
+     "name_en": "Wildlife & Conservation",
+     "deprecated_to": null
+    },
+    {
+     "code": "O6",
+     "name_ko": "가축·축산",
+     "name_en": "Livestock",
+     "deprecated_to": null
+    },
+    {
+     "code": "O7",
+     "name_ko": "조류·어류·곤충",
+     "name_en": "Birds, Fish & Insects",
+     "deprecated_to": null
+    },
+    {
+     "code": "O8",
+     "name_ko": "동물과 인간 관계",
+     "name_en": "Human-Animal Relations",
+     "deprecated_to": null
+    }
+   ]
+  },
+  {
+   "code": "P",
+   "name_ko": "법·정치·교육",
+   "name_en": "Law, Politics & Education",
+   "fields": [
+    {
+     "code": "P1",
+     "name_ko": "헌법·공법",
+     "name_en": "Constitutional & Public Law",
+     "deprecated_to": null
+    },
+    {
+     "code": "P2",
+     "name_ko": "민사·생활법률",
+     "name_en": "Civil, Commercial & Everyday Law",
+     "deprecated_to": null
+    },
+    {
+     "code": "P3",
+     "name_ko": "형법·범죄",
+     "name_en": "Criminal Law & Crime",
+     "deprecated_to": null
+    },
+    {
+     "code": "P4",
+     "name_ko": "지식재산·저작권",
+     "name_en": "Intellectual Property & Copyright",
+     "deprecated_to": null
+    },
+    {
+     "code": "P5",
+     "name_ko": "정치이론·제도",
+     "name_en": "Political Theory & Institutions",
+     "deprecated_to": null
+    },
+    {
+     "code": "P6",
+     "name_ko": "국제관계·외교",
+     "name_en": "International Relations",
+     "deprecated_to": null
+    },
+    {
+     "code": "P7",
+     "name_ko": "행정·공공정책",
+     "name_en": "Administration & Public Policy",
+     "deprecated_to": null
+    },
+    {
+     "code": "P8",
+     "name_ko": "교육학·교육제도",
+     "name_en": "Pedagogy & Education Systems",
+     "deprecated_to": null
+    },
+    {
+     "code": "P9",
+     "name_ko": "안보·군사정책",
+     "name_en": "Security & Defense Policy",
+     "deprecated_to": null
+    }
+   ]
+  },
+  {
+   "code": "Z",
+   "name_ko": "메타(학습법·도구·2nd BRAIN 자체)",
+   "name_en": "Meta (Learning, Tools, 2nd BRAIN)",
+   "fields": [
+    {
+     "code": "Z1",
+     "name_ko": "학습법·기억술",
+     "name_en": "Learning Methods & Mnemonics",
+     "deprecated_to": null
+    },
+    {
+     "code": "Z2",
+     "name_ko": "도구·소프트웨어·지식관리",
+     "name_en": "Tools, Software & Knowledge Management",
+     "deprecated_to": null
+    },
+    {
+     "code": "Z3",
+     "name_ko": "2nd BRAIN 자체",
+     "name_en": "2nd BRAIN Itself",
+     "deprecated_to": null
+    },
+    {
+     "code": "Z4",
+     "name_ko": "AI 활용·프롬프트",
+     "name_en": "AI Usage & Prompting",
+     "deprecated_to": null,
+     "note": "기술 자체는 G5"
+    },
+    {
+     "code": "Z5",
+     "name_ko": "글쓰기·발표·설명법",
+     "name_en": "Writing, Presenting & Explaining",
+     "deprecated_to": null
+    },
+    {
+     "code": "Z6",
+     "name_ko": "미분류",
+     "name_en": "Unclassified (fallback)",
+     "deprecated_to": null,
+     "fallback": true
+    }
+   ]
+  }
+ ]
+}

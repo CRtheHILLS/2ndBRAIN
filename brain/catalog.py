@@ -17,29 +17,21 @@ import datetime as dt
 import hashlib
 import itertools
 import json
+import logging
 from pathlib import Path
 
-from . import llm, store
+from pydantic import ValidationError
+
+from . import frame, models, prompts, store, think
+from . import graph as knowledge_graph
 from .config import get_settings
+from .think import parse_json
+
+log = logging.getLogger(__name__)
 
 DOMAINS = ["과학", "역사", "종교", "철학", "심리", "경제", "기술", "예술", "동물", "건강", "기타"]
 
 BODY_LIMIT = 15000
-
-CATALOG_SYSTEM = """너는 2nd BRAIN의 사서(librarian)다. 자료 한 편을 읽고 서가에 꽂을 분류 카드를 만든다.
-JSON 객체 하나만 출력한다. 마크다운 펜스, 설명 문장, 인사말은 절대 붙이지 않는다.
-
-{"title": "<자료 제목, 한국어. 원문에 없으면 내용으로 지어낸다>",
- "summary": "<200자 이내 한국어 요약>",
- "domain": "<과학|역사|종교|철학|심리|경제|기술|예술|동물|건강|기타 중 정확히 하나>",
- "tags": ["<한국어 태그 3~8개>"],
- "concepts": ["<정규화된 한국어 개념명 3~10개>"],
- "entities": ["<인물·장소·작품 등 고유명사, 없으면 빈 배열>"]}
-
-concepts는 반드시 표준형(canonical)으로 적는다: "얽힘 현상"이 아니라 "양자 얽힘",
-"다윈의 진화론"이 아니라 "진화론", "블랙홀 현상"이 아니라 "블랙홀".
-같은 개념은 자료가 달라도 언제나 똑같은 이름이어야 개념 그래프가 이어진다.
-모든 값은 한국어로 쓴다(고유명사는 원어 병기 허용)."""
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +148,17 @@ def learned() -> list[dict]:
     return out
 
 
+def find_entry_by_prefix(prefix: str) -> dict | None:
+    """The learned entry whose id starts with ``prefix`` (e.g. the 16 hex of a ``src:`` node)."""
+    if not prefix:
+        return None
+    for p in sorted(entries_dir().glob(f"{prefix}*.json")):
+        d = get_entry(p.stem)
+        if d:
+            return d
+    return None
+
+
 def get_entry(entry_id: str) -> dict | None:
     p = entry_path(entry_id)
     if not p.is_file():
@@ -171,17 +174,7 @@ def get_entry(entry_id: str) -> dict | None:
 # learning
 # ---------------------------------------------------------------------------
 
-def _parse_json(raw: str) -> dict | None:
-    """Same balanced-brace salvage distill uses: take the outermost {...}."""
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        return None
-    try:
-        d = json.loads(raw[start:end + 1])
-    except json.JSONDecodeError:
-        return None
-    return d if isinstance(d, dict) else None
+_parse_json = parse_json  # salvage logic lives in think.py
 
 
 def _str_list(v, limit: int) -> list[str]:
@@ -211,60 +204,150 @@ def _raw_path(entry: dict) -> Path | None:
     return guess if guess.is_file() else None
 
 
-def learn_one(entry: dict, llm_complete=None) -> dict | None:
-    """Classify one queued item and write ``entries/<id>.json``.
+def _complete_default(system: str, user: str) -> str:
+    return think.complete_text(system, user, smart=False)[0]
 
-    Returns the learned entry, or ``None`` when the source is unreadable or the
-    model answer cannot be parsed — in that case the item stays pending so a
-    later pass retries it.
-    """
-    complete = llm_complete or llm.complete
-    src = _raw_path(entry)
-    if src is None:
-        return None
-    try:
-        body = store.read_md(src)[1]
-    except (OSError, ValueError):
-        return None
-    body = (body or "").strip()[:BODY_LIMIT]
-    if not body:
-        body = entry.get("file", "")
-    try:
-        raw = complete(CATALOG_SYSTEM, body)
-    except Exception:
-        return None
-    d = _parse_json(raw or "")
-    if d is None:
-        return None
 
-    domain = str(d.get("domain", "")).strip()
-    if domain not in DOMAINS:
-        domain = "기타"
-    out = {
-        **{k: entry.get(k) for k in ("id", "book", "file", "path", "sha256", "added_at")},
-        "status": "learned",
-        "learned_at": dt.datetime.now().isoformat(timespec="seconds"),
-        "title": str(d.get("title") or entry.get("file") or "").strip(),
-        "summary": str(d.get("summary") or "").strip(),
-        "domain": domain,
-        "tags": _str_list(d.get("tags"), 8),
-        "concepts": _str_list(d.get("concepts"), 10),
-        "entities": _str_list(d.get("entities"), 20),
-        "links": _str_list(d.get("links"), 20),
-    }
-    entry_path(out["id"]).write_text(json.dumps(out, ensure_ascii=False, indent=2), "utf-8")
+def _cards_from(d: dict, first_index: int) -> dict[int, models.CatalogCard]:
+    """Validate a parsed answer into ``{index: card}``; bad cards are skipped."""
+    raw = d.get("cards")
+    single = not isinstance(raw, list)
+    if single:
+        raw = [d] if "title" in d else []
+    out: dict[int, models.CatalogCard] = {}
+    for c in raw:
+        if not isinstance(c, dict):
+            continue
+        if single and "index" not in c:
+            c = {**c, "index": first_index}
+        try:
+            card = models.CatalogCard.model_validate(c)
+        except ValidationError:
+            continue
+        out.setdefault(card.index, card)
     return out
 
 
-def learn_pending(limit: int = 10, llm_complete=None) -> dict:
-    items = pending()[:max(0, limit)]
-    ok = bad = 0
-    for item in items:
-        if learn_one(item, llm_complete=llm_complete) is None:
-            bad += 1
-        else:
-            ok += 1
-    return {"learned": ok, "failed": bad, "remaining": len(pending())}
+def learn_batch(entries: list[dict], complete=None) -> list[dict | None]:
+    """Classify several queued items in one model call.
+
+    Returns one learned entry (or ``None``) per input entry, in order.  A
+    ``None`` means unreadable source, missing/invalid card, or a failed call:
+    the item stays pending.  ``think.ThinkUnavailable`` propagates.
+    """
+    complete = complete or _complete_default
+    results: list[dict | None] = [None] * len(entries)
+    if not entries:
+        return results
+    budget = BODY_LIMIT // len(entries)
+    blocks, sent = [], []
+    for pos, entry in enumerate(entries):
+        src = _raw_path(entry)
+        if src is None:
+            continue
+        try:
+            body = store.read_md(src)[1]
+        except (OSError, ValueError):
+            continue
+        body = (body or "").strip()[:budget] or entry.get("file", "")
+        blocks.append(f"### 자료 {pos + 1}\n제목 힌트: {entry.get('file', '')}\n\n{body}")
+        sent.append(pos)
+    if not sent:
+        return results
+    try:
+        raw = complete(prompts.catalog_batch_system(), "\n\n".join(blocks))
+    except think.ThinkUnavailable:
+        raise
+    except Exception:
+        return results
+    d = _parse_json(raw or "")
+    if d is None:
+        return results
+    cards = _cards_from(d, sent[0] + 1)
+    for pos in sent:
+        card = cards.get(pos + 1)
+        if card is None:
+            continue
+        entry = entries[pos]
+        domain = card.domain.strip()
+        if domain not in DOMAINS:
+            domain = "기타"
+        code = card.field_code.strip()
+        code = frame.resolve_code(code) if frame.is_valid_code(code) else frame.FALLBACK_CODE
+        pairs = [{"ko": p.ko.strip(), "en": p.en.strip()} for p in card.concept_pairs if p.ko.strip()]
+        concepts = _str_list(card.concepts, 10) or _str_list([p["ko"] for p in pairs], 10)
+        out = {
+            **{k: entry.get(k) for k in ("id", "book", "file", "path", "sha256", "added_at")},
+            "status": "learned",
+            "learned_at": dt.datetime.now().isoformat(timespec="seconds"),
+            "title": card.title.strip() or str(entry.get("file") or ""),
+            "summary": card.summary.strip(),
+            "domain": domain,
+            "field_code": code,
+            "tags": _str_list(card.tags, 8),
+            "concepts": concepts,
+            "concept_pairs": pairs,
+            "entities": _str_list(card.entities, 20),
+            "links": [],
+        }
+        entry_path(out["id"]).write_text(json.dumps(out, ensure_ascii=False, indent=2), "utf-8")
+        results[pos] = out
+    return results
+
+
+def learn_one(entry: dict, llm_complete=None) -> dict | None:
+    """Classify a single queued item (a batch of one)."""
+    return learn_batch([entry], complete=llm_complete)[0]
+
+
+def _after_learn(entries: list[dict]) -> list[str]:
+    """Put freshly learned entries into the graph; returns new concept ids."""
+    out: list[str] = []
+    to_bridge: list[str] = []
+    for e in entries:
+        new = [c for c in knowledge_graph.ingest_card(e) if c not in out]
+        out.extend(new)
+        if not _is_quest_book(e.get("book") or ""):  # a quest bridges its own concepts in its stage
+            to_bridge.extend(new)
+    if to_bridge:
+        try:
+            from . import bridge
+            made = bridge.rebridge(to_bridge)
+            if made:
+                bridge.rerender_affected(list(dict.fromkeys(x for b in made for x in (b["src"], b["dst"]))))
+        except Exception as e:  # noqa: BLE001 - bridging must never break /catalog/learn
+            log.warning("새 개념 다리 놓기 실패(학습은 저장됨): %s", e)
+    return out
+
+
+def _is_quest_book(book: str) -> bool:
+    if not book:
+        return False
+    from . import quest
+    return (quest.quest_dir(book) / "quest.json").is_file()
+
+
+def learn_pending(limit: int = 10, llm_complete=None, book: str | None = None,
+                  batch_size: int = 5) -> dict:
+    def todo() -> list[dict]:
+        return [i for i in pending() if book is None or i.get("book") == book]
+
+    items = todo()[:max(0, limit)]
+    size = max(1, batch_size)
+    learned = bad = 0
+    new_concepts: list[str] = []
+    for i in range(0, len(items), size):
+        batch_done = []
+        for r in learn_batch(items[i:i + size], complete=llm_complete):
+            if r is None:
+                bad += 1
+            else:
+                batch_done.append(r)
+        # graph upsert right after each batch so a later ThinkUnavailable loses nothing
+        learned += len(batch_done)
+        new_concepts += [c for c in _after_learn(batch_done) if c not in new_concepts]
+    return {"learned": learned, "failed": bad, "remaining": len(todo()),
+            "new_concepts": new_concepts}
 
 
 # ---------------------------------------------------------------------------

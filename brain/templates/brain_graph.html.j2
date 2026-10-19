@@ -1,0 +1,295 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CR의 2nd BRAIN · 두뇌 그래프</title><link rel="stylesheet" href="../brain.css"></head>
+<body class="brain">
+<header class="brain-head"><a class="brain-back" href="../index.html">← 서재</a><h1>🧠 두뇌 그래프</h1></header>
+<div class="brain-controls" id="controls" hidden>
+  <input id="q" type="search" placeholder="점 찾기 (이름·영문)" aria-label="점 찾기">
+  <label class="chip"><input type="checkbox" id="bridgeOnly"> 다리만 보기</label>
+  <label class="chip"><input type="checkbox" id="hideMeta" checked> 자료·수업 노드 숨기기</label>
+  <span class="brain-count" id="count"></span>
+  <div class="brain-legend" id="legend"></div>
+</div>
+<p class="brain-note" id="note" hidden></p>
+<div class="brain-wrap" id="wrap" hidden>
+  <svg id="svg" role="img" aria-label="지식 점잇기 그래프"></svg>
+  <aside class="brain-panel" id="panel" hidden>
+    <button type="button" class="brain-close" id="closePanel" aria-label="닫기">✕</button>
+    <div id="panelBody"></div>
+  </aside>
+</div>
+<script type="application/json" id="areas">{{ areas_json|tojson }}</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  var NOTICE = "이 페이지는 토큰이 있어야 데이터를 불러올 수 있어요. Clair에게 '두뇌 그래프 링크 줘'라고 말하면 토큰이 든 링크를 줘요.";
+  var META_KINDS = ["source", "lesson", "book", "quest", "question"];
+  var BRIDGE_RELS = ["bridge", "requires", "is_a"];
+  var cfg = JSON.parse(document.getElementById("areas").textContent);
+  var AREAS = cfg.areas, PALETTE = cfg.palette, GRAY = "#9a9a9a";
+  var areaIndex = {}, areaName = {};
+  AREAS.forEach(function (a, i) { areaIndex[a.code] = i; areaName[a.code] = a.name_ko; });
+
+  var noteEl = document.getElementById("note");
+  function showNote(msg) {
+    noteEl.textContent = msg; noteEl.hidden = false;
+    document.getElementById("controls").hidden = true;
+    document.getElementById("wrap").hidden = true;
+  }
+  function getToken() { try { return localStorage.getItem("brain_token") || ""; } catch (e) { return ""; } }
+  function setToken(t) { try { localStorage.setItem("brain_token", t); } catch (e) {} }
+  function clearToken() { try { localStorage.removeItem("brain_token"); } catch (e) {} }
+
+  // token arrives as #t=<token> (a fragment never reaches server logs); old ?t= links still work
+  var params = new URLSearchParams(location.search);
+  var frag = new URLSearchParams(location.hash.replace(/^#/, ""));
+  var given = frag.get("t") || params.get("t");
+  if (given) setToken(given);
+  if (frag.has("t") || params.has("t")) {
+    params.delete("t");
+    frag.delete("t");
+    var qs = params.toString(), hs = frag.toString();
+    history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + (hs ? "#" + hs : ""));
+  }
+  var token = getToken();
+  if (!token) { showNote(NOTICE); return; }
+
+  function api(path) {
+    return fetch(path, { headers: { "X-Brain-Token": token } }).then(function (r) {
+      if (r.status === 401 || r.status === 403) { var e = new Error("auth"); e.auth = true; throw e; }
+      if (!r.ok) { var e2 = new Error("http"); e2.status = r.status; throw e2; }
+      return r.json();
+    });
+  }
+  function fail(e) {
+    if (e && e.auth) { clearToken(); showNote(NOTICE); }
+    else showNote("데이터를 불러오지 못했어요 (" + ((e && e.status) || "네트워크") + ")");
+  }
+
+  var nodes = [], edges = [], byId = {}, degree = {}, truncated = false;
+  var activeAreas = {}, query = "", bridgeOnly = false, hideMeta = true;
+  var selectedId = null;
+  var svg, gRoot, gLink, gNode, gLabel, sim, zoomK = 1, linkSel, nodeSel, labelSel;
+
+  function areaOf(n) { return (n.field_code || "").charAt(0); }
+  function colorOf(n) { var i = areaIndex[areaOf(n)]; return i === undefined ? GRAY : PALETTE[i % PALETTE.length]; }
+  function radiusOf(n) { return 4 + Math.min(12, Math.sqrt(degree[n.id] || 0) * 2); }
+  function isBridge(e) { return BRIDGE_RELS.indexOf(e.rel) >= 0; }
+
+  api("/graph/full?limit=2000").then(function (data) {
+    nodes = data.nodes || []; edges = data.edges || []; truncated = !!data.truncated;
+    nodes.forEach(function (n) { byId[n.id] = n; degree[n.id] = 0; });
+    edges = edges.filter(function (e) { return byId[e.src] && byId[e.dst]; });
+    edges.forEach(function (e) { degree[e.src]++; degree[e.dst]++; });
+    buildLegend();
+    document.getElementById("controls").hidden = false;
+    document.getElementById("wrap").hidden = false;
+    initSvg();
+    bindControls();
+    draw();
+  }).catch(fail);
+
+  function buildLegend() {
+    var box = document.getElementById("legend");
+    AREAS.forEach(function (a) {
+      activeAreas[a.code] = true;
+      var lab = document.createElement("label"); lab.className = "chip";
+      var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = true;
+      cb.addEventListener("change", function () { activeAreas[a.code] = cb.checked; draw(); });
+      var dot = document.createElement("i"); dot.className = "swatch";
+      dot.style.background = PALETTE[areaIndex[a.code] % PALETTE.length];
+      lab.appendChild(cb); lab.appendChild(dot); lab.appendChild(document.createTextNode(" " + a.name_ko));
+      box.appendChild(lab);
+    });
+  }
+
+  function bindControls() {
+    document.getElementById("q").addEventListener("input", function (ev) { query = ev.target.value.trim().toLowerCase(); applyFade(); });
+    document.getElementById("bridgeOnly").addEventListener("change", function (ev) { bridgeOnly = ev.target.checked; draw(); });
+    document.getElementById("hideMeta").addEventListener("change", function (ev) { hideMeta = ev.target.checked; draw(); });
+    document.getElementById("closePanel").addEventListener("click", closePanel);
+    window.addEventListener("resize", function () { sizeSvg(); if (sim) sim.alpha(0.3).restart(); });
+  }
+
+  function sizeSvg() {
+    var w = document.getElementById("wrap").clientWidth, h = Math.max(360, Math.round(window.innerHeight * 0.68));
+    svg.attr("width", w).attr("height", h).attr("viewBox", [0, 0, w, h]);
+    return [w, h];
+  }
+
+  function initSvg() {
+    svg = d3.select("#svg");
+    gRoot = svg.append("g");
+    gLink = gRoot.append("g"); gNode = gRoot.append("g"); gLabel = gRoot.append("g");
+    svg.call(d3.zoom().scaleExtent([0.2, 8]).on("zoom", function (ev) {
+      gRoot.attr("transform", ev.transform); zoomK = ev.transform.k; updateLabels();
+    }));
+    sizeSvg();
+    sim = d3.forceSimulation()
+      .force("link", d3.forceLink().id(function (d) { return d.id; }).distance(46).strength(0.5))
+      .force("charge", d3.forceManyBody().strength(-90))
+      .force("center", d3.forceCenter(sizeSvg()[0] / 2, sizeSvg()[1] / 2))
+      .force("collide", d3.forceCollide().radius(function (d) { return radiusOf(d) + 2; }))
+      .on("tick", tick);
+  }
+
+  function visibleSets() {
+    var pass = nodes.filter(function (n) {
+      if (hideMeta && META_KINDS.indexOf(n.kind) >= 0) return false;
+      var a = areaOf(n);
+      if (a && activeAreas[a] === false) return false;
+      return true;
+    });
+    var ok = {}; pass.forEach(function (n) { ok[n.id] = true; });
+    var es = edges.filter(function (e) { return ok[e.src] && ok[e.dst] && (!bridgeOnly || isBridge(e)); });
+    if (bridgeOnly) {
+      var touched = {}; es.forEach(function (e) { touched[e.src] = true; touched[e.dst] = true; });
+      pass = pass.filter(function (n) { return touched[n.id]; });
+    }
+    return { nodes: pass, edges: es };
+  }
+
+  function draw() {
+    var v = visibleSets();
+    var links = v.edges.map(function (e) {
+      return { k: e.src + "|" + e.dst + "|" + e.rel, source: e.src, target: e.dst, rel: e.rel, reason: e.reason };
+    });
+    linkSel = gLink.selectAll("line").data(links, function (d) { return d.k; });
+    linkSel.exit().remove();
+    linkSel = linkSel.enter().append("line").merge(linkSel)
+      .attr("class", function (d) { return "lk " + (BRIDGE_RELS.indexOf(d.rel) >= 0 ? "lk-bridge" : d.rel === "related" ? "lk-related" : "lk-other"); });
+
+    nodeSel = gNode.selectAll("circle").data(v.nodes, function (d) { return d.id; });
+    nodeSel.exit().remove();
+    nodeSel = nodeSel.enter().append("circle")
+      .on("click", function (ev, d) { ev.stopPropagation(); openPanel(d.id); })
+      .call(d3.drag()
+        .on("start", function (ev, d) { if (!ev.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+        .on("drag", function (ev, d) { d.fx = ev.x; d.fy = ev.y; })
+        .on("end", function (ev, d) { if (!ev.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }))
+      .merge(nodeSel)
+      .attr("r", radiusOf).attr("fill", colorOf);
+    nodeSel.selectAll("title").remove();
+    nodeSel.append("title").text(function (d) { return d.label_ko || d.label_en || d.id; });
+
+    labelSel = gLabel.selectAll("text").data(v.nodes, function (d) { return d.id; });
+    labelSel.exit().remove();
+    labelSel = labelSel.enter().append("text").attr("class", "nl").attr("dy", "-0.7em").merge(labelSel)
+      .text(function (d) { return d.label_ko || d.label_en || ""; });
+
+    sim.nodes(v.nodes);
+    sim.force("link").links(links);
+    sim.alpha(0.8).restart();
+    updateLabels(); applyFade();
+
+    var nb = links.filter(function (l) { return BRIDGE_RELS.indexOf(l.rel) >= 0; }).length;
+    document.getElementById("count").textContent =
+      "노드 " + v.nodes.length + " · 간선 " + links.length + " · 다리 " + nb + (truncated ? " · 일부만 보여줘요 (상위 2000개)" : "");
+  }
+
+  function tick() {
+    if (linkSel) linkSel.attr("x1", function (d) { return d.source.x; }).attr("y1", function (d) { return d.source.y; })
+      .attr("x2", function (d) { return d.target.x; }).attr("y2", function (d) { return d.target.y; });
+    if (nodeSel) nodeSel.attr("cx", function (d) { return d.x; }).attr("cy", function (d) { return d.y; });
+    if (labelSel) labelSel.attr("x", function (d) { return d.x; }).attr("y", function (d) { return d.y; });
+  }
+
+  function updateLabels() {
+    if (!labelSel) return;
+    labelSel.style("display", function (d) { return ((degree[d.id] || 0) >= 3 || zoomK > 1.4) ? null : "none"; });
+  }
+
+  function matches(n) {
+    if (!query) return true;
+    var hay = ((n.label_ko || "") + " " + (n.label_en || "") + " " + (n.tags || []).join(" ")).toLowerCase();
+    return hay.indexOf(query) >= 0;
+  }
+  function applyFade() {
+    if (!nodeSel) return;
+    nodeSel.style("opacity", function (d) { return matches(d) ? 1 : 0.12; });
+    labelSel.style("opacity", function (d) { return matches(d) ? 1 : 0.1; });
+  }
+
+  // ---- side panel ----
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function closePanel() { document.getElementById("panel").hidden = true; selectedId = null; }
+
+  function section(parent, title, items) {
+    if (!items.length) return;
+    parent.appendChild(el("h3", null, title));
+    var ul = el("ul");
+    items.forEach(function (it) { ul.appendChild(it); });
+    parent.appendChild(ul);
+  }
+
+  function openPanel(id) {
+    selectedId = id;
+    var panel = document.getElementById("panel"), body = document.getElementById("panelBody");
+    panel.hidden = false;
+    body.textContent = "불러오는 중이에요…";
+    api("/graph?center=" + encodeURIComponent(id) + "&depth=1").then(function (data) {
+      if (selectedId !== id) return;
+      renderPanel(body, id, data);
+    }).catch(function (e) {
+      if (e && e.auth) { fail(e); return; }
+      body.textContent = "자세한 내용을 불러오지 못했어요 (" + ((e && e.status) || "네트워크") + ")";
+    });
+  }
+
+  function renderPanel(body, id, data) {
+    body.textContent = "";
+    var pool = {}; (data.nodes || []).forEach(function (n) { pool[n.id] = n; });
+    var n = pool[id] || byId[id] || { id: id, label_ko: id };
+    body.appendChild(el("h2", null, n.label_ko || n.id));
+    if (n.label_en) body.appendChild(el("p", "muted", n.label_en));
+    var a = areaOf(n);
+    var meta = [];
+    if (a) meta.push("분야: " + (areaName[a] || a) + (n.field_code ? " (" + n.field_code + ")" : ""));
+    meta.push("종류: " + (n.kind || "-"));
+    body.appendChild(el("p", "muted", meta.join(" · ")));
+    if (n.summary) body.appendChild(el("p", null, n.summary));
+    if (n.wikidata) {
+      var p = el("p"), link = el("a", null, "Wikidata " + n.wikidata);
+      link.href = "https://www.wikidata.org/wiki/" + encodeURIComponent(n.wikidata);
+      link.target = "_blank"; link.rel = "noopener noreferrer";
+      p.appendChild(link); body.appendChild(p);
+    }
+    var lessons = [], sources = [], bridges = [], seen = {};
+    (data.edges || []).forEach(function (e) {
+      var other = pool[e.src === id ? e.dst : e.src];
+      if (!other || other.id === id) return;
+      if (other.kind === "lesson") {
+        if (seen[other.id]) return; seen[other.id] = true;
+        var m = /^lesson:(.+):day-(\d+)$/.exec(other.id);
+        var li = el("li");
+        if (m) {
+          var a1 = el("a", null, other.label_ko || other.id);
+          a1.href = "/site/quests/" + encodeURIComponent(m[1]) + "/day-" + m[2] + ".html";
+          li.appendChild(a1);
+        } else li.textContent = other.label_ko || other.id;
+        lessons.push(li);
+      } else if (other.kind === "source") {
+        if (seen[other.id]) return; seen[other.id] = true;
+        sources.push(el("li", null, other.label_ko || other.label_en || other.id));
+      }
+      if (isBridge(e)) {
+        var li2 = el("li");
+        li2.appendChild(el("strong", null, (other.label_ko || other.id) + " "));
+        li2.appendChild(el("span", "muted", "(" + e.rel + ")"));
+        if (e.reason) li2.appendChild(el("div", "muted", e.reason));
+        bridges.push(li2);
+      }
+    });
+    section(body, "📖 수업", lessons);
+    section(body, "📚 자료", sources);
+    section(body, "🌉 다리", bridges);
+    if (!lessons.length && !sources.length && !bridges.length) body.appendChild(el("p", "muted", "아직 연결된 수업·자료·다리가 없어요."));
+  }
+})();
+</script>
+</body></html>

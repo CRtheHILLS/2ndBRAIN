@@ -1,14 +1,19 @@
 import json
 import re
+import secrets
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depends, Request
-from fastapi.responses import RedirectResponse, PlainTextResponse, HTMLResponse, FileResponse
+from typing import Literal
+
+from fastapi.responses import Response, RedirectResponse, PlainTextResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from brain import store, ingest, distill, render, index, levels, catalog
+from pydantic import BaseModel, Field
+from brain import store, ingest, distill, render, index, levels, catalog, think, graph, quest, scheduler
+from brain import retrieve
+from brain import ask as ask_mod, vault_export
 from brain.config import get_settings
 from brain.ingest import _sanitize_filename
 from brain.slug import slugify
@@ -499,8 +504,14 @@ async def lifespan(app: FastAPI):
     if get_settings().brain_token in ("", "change-me"):
         raise RuntimeError("BRAIN_TOKEN must be set")
     render.render_shelf()
+    try: render.render_brain_page()
+    except Exception: pass  # never block startup
     app.mount("/site", StaticFiles(directory=store.site_dir(), html=True), name="site")
-    yield
+    scheduler.start()
+    try:
+        yield
+    finally:
+        scheduler.stop()
 
 
 app = FastAPI(title="2nd BRAIN", lifespan=lifespan)
@@ -514,13 +525,109 @@ async def _no_index_headers(request: Request, call_next):
 
 
 def require_token(x_brain_token: str = Header(default="")):
-    if x_brain_token != get_settings().brain_token:
+    if not secrets.compare_digest(x_brain_token.encode("utf-8"), get_settings().brain_token.encode("utf-8")):
         raise HTTPException(401, "bad token")
 
 
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+# --- learn quests -------------------------------------------------------------
+
+_QUEST_SLUG = re.compile(r"^[0-9a-z가-힣-]+$")
+
+
+class QuestCreate(BaseModel):
+    sentence: str = Field(..., min_length=2, max_length=600)
+    days: int | None = Field(None, ge=1, le=30)
+    level: str | None = None
+
+
+class TaskOutput(BaseModel):
+    output: dict
+
+
+def _quest_or_404(slug: str) -> dict:
+    if not _QUEST_SLUG.match(slug):
+        raise HTTPException(400, "슬러그 형식이 올바르지 않아요")
+    try:
+        return quest.load(slug)
+    except (OSError, json.JSONDecodeError):
+        raise HTTPException(404, "그런 퀘스트가 없어요") from None
+
+
+@app.post("/quests", dependencies=[Depends(require_token)])
+def quest_create(body: QuestCreate):
+    if not body.sentence.strip():
+        raise HTTPException(400, "배우고 싶은 걸 한 문장으로 적어 주세요")
+    if body.level is not None and body.level not in levels.LEVELS:
+        raise HTTPException(400, f"눈높이는 {', '.join(levels.LEVELS)} 중 하나예요")
+    q = quest.create(body.sentence.strip(), days=body.days, level=body.level)
+    if not q["existing"]:
+        quest.start_background(q["slug"])
+    return {"slug": q["slug"], "status": q["status"], "existing": q["existing"],
+            "url": f"/site/quests/{q['slug']}/index.html"}
+
+
+@app.get("/quests", dependencies=[Depends(require_token)])
+def quest_list():
+    keys = ("slug", "sentence", "status", "created_at", "updated_at", "summary", "days_requested", "level")
+    return [{k: q.get(k) for k in keys} for q in quest.list_quests()]
+
+
+@app.get("/quests/{slug}", dependencies=[Depends(require_token)])
+def quest_get(slug: str):
+    q = _quest_or_404(slug)
+    return {**q, "open_tasks": len(quest.open_tasks(slug))}
+
+
+@app.get("/quests/{slug}/tasks", dependencies=[Depends(require_token)])
+def quest_tasks(slug: str):
+    _quest_or_404(slug)
+    return quest.open_tasks(slug)
+
+
+@app.post("/quests/{slug}/tasks/{task_id}", dependencies=[Depends(require_token)])
+def quest_submit_task(slug: str, task_id: str, body: TaskOutput):
+    _quest_or_404(slug)
+    try:
+        quest.submit_task(slug, task_id, body.output)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    except KeyError:
+        raise HTTPException(404, "그런 과제가 없어요") from None
+    # still running (e.g. about to park on this very task)? the worker runs once more when it ends
+    started = quest.start_or_request_resume(slug)
+    return {"accepted": True, "status": quest.load(slug)["status"], "resume_requested": not started}
+
+
+@app.post("/quests/{slug}/resume", dependencies=[Depends(require_token)])
+def quest_resume(slug: str):
+    _quest_or_404(slug)
+    return quest.resume(slug)
+
+
+@app.post("/quests/{slug}/rerender", dependencies=[Depends(require_token)])
+def quest_rerender(slug: str, level: str):
+    _quest_or_404(slug)
+    if level not in levels.LEVELS:
+        raise HTTPException(400, f"눈높이는 {', '.join(levels.LEVELS)} 중 하나예요")
+    if quest.is_running(slug):
+        raise HTTPException(409, "지금 실행 중이에요. 끝난 뒤에 다시 시도해 주세요")
+    levels.set_level(f"quest:{slug}", level)
+    d = quest.quest_dir(slug)
+    for pat, sub in (("teach-*.json", "tasks"), ("*.json", "days")):
+        for f in (d / sub).glob(pat):
+            f.unlink(missing_ok=True)
+    q = quest.load(slug)
+    q["level"] = level
+    q["stage_done"] = [s for s in q["stage_done"] if s not in ("teach", "bridge", "archive")]
+    q["status"] = "queued"
+    quest.save(slug, q)
+    quest.start_background(slug)
+    return {"slug": slug, "status": "queued", "level": level}
 
 
 @app.get("/robots.txt")
@@ -572,6 +679,11 @@ def delete_book(slug: str):
         shutil.rmtree(site)
     render.render_shelf()
     index.rebuild()
+    try:
+        from brain import vec
+        vec.delete_book(slug)
+    except Exception:
+        pass
     return {"deleted": slug}
 
 
@@ -580,9 +692,34 @@ def books():
     return store.list_books()
 
 
-@app.get("/search")
-def search(q: str, k: int = 10):
-    return index.search(q, k)
+@app.get("/search", dependencies=[Depends(require_token)])  # spends embedding quota
+def search(q: str, k: int = 10, mode: str = "hybrid"):
+    k = max(1, k)
+    if mode == "fts":
+        return index.search(q, k)
+    return retrieve.hybrid(q, k)  # RRF scores are not comparable to FTS bm25 scores
+
+
+class AskBody(BaseModel):
+    q: str
+    mode: Literal["auto", "vault", "web"] = "auto"
+    level: str = "초등"
+
+
+@app.post("/ask", dependencies=[Depends(require_token)])
+def ask_route(body: AskBody):
+    if not body.q.strip():
+        raise HTTPException(400, "질문을 적어 주세요.")
+    try:
+        return ask_mod.ask(body.q.strip(), body.mode, body.level)
+    except think.ThinkUnavailable as e:
+        raise HTTPException(503, f"생각 담당(모델)을 지금 쓸 수 없어요: {'; '.join(e.reasons)}")
+
+
+@app.get("/vault.zip", dependencies=[Depends(require_token)])
+def vault_zip():
+    return Response(vault_export.build_zip(), media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="2ndbrain-vault.zip"'})
 
 
 # ---------------------------------------------------------------------------
@@ -604,8 +741,11 @@ def catalog_pending():
 
 
 @app.post("/catalog/learn", dependencies=[Depends(require_token)])
-def catalog_learn(limit: int = 10):
-    return catalog.learn_pending(limit)
+def catalog_learn(limit: int = 10, book: str | None = None):
+    try:
+        return catalog.learn_pending(limit, book=book)
+    except think.ThinkUnavailable as e:
+        raise HTTPException(503, f"생각 담당(모델)을 지금 쓸 수 없어요: {'; '.join(e.reasons)}")
 
 
 @app.get("/catalog/graph")
@@ -626,6 +766,65 @@ def catalog_entry(entry_id: str):
 @app.post("/catalog/backfill", dependencies=[Depends(require_token)])
 def catalog_backfill():
     return {"registered": catalog.backfill()}
+
+
+# ---------------------------------------------------------------------------
+# Knowledge graph
+# ---------------------------------------------------------------------------
+
+@app.get("/graph", dependencies=[Depends(require_token)])
+def graph_view(center: str | None = None, depth: int = 1, field: str | None = None,
+               kind: str | None = None):
+    if center:
+        return graph.neighbors(center, depth)
+    if field:
+        return {"nodes": graph.by_field(field)}
+    if kind:
+        return {"nodes": graph.by_kind(kind, 200)}
+    raise HTTPException(400, "center, field, kind 중 하나는 꼭 필요해요.")
+
+
+@app.get("/graph/full", dependencies=[Depends(require_token)])
+def graph_full(limit: int = 2000):
+    return graph.full(limit)
+
+
+@app.get("/graph/stats", dependencies=[Depends(require_token)])
+def graph_stats():
+    return graph.stats()
+
+
+@app.post("/graph/rebuild", dependencies=[Depends(require_token)])
+def graph_rebuild():
+    return {"replayed": graph.rebuild()}
+
+
+REBRIDGE_CHUNK = 5  # nodes per think call (5 x 8 candidates = the 40-pair batch)
+
+
+@app.post("/graph/rebridge", dependencies=[Depends(require_token)])
+def graph_rebridge(field: str | None = None, limit: int = 50):
+    """Re-run bridges for concepts in ``field`` (or the ``limit`` most recently updated ones).
+
+    Targets are judged in chunks of REBRIDGE_CHUNK nodes, one think call per chunk (at most
+    40 pairs each); ``limit`` is clamped to 100, so one request makes at most 20 think calls.
+    """
+    from brain import bridge
+    limit = max(1, min(limit, 100))
+    if field:
+        targets = [n["id"] for n in graph.by_field(field, 10**6) if n["kind"] == "concept"][:limit]
+    else:
+        targets = bridge.recent_concepts(limit)
+    made: list[dict] = []
+    try:
+        for i in range(0, len(targets), REBRIDGE_CHUNK):
+            made += bridge.rebridge(targets[i:i + REBRIDGE_CHUNK], strict=True)
+    except think.ThinkUnavailable as e:
+        raise HTTPException(503, f"생각 담당(모델)을 지금 쓸 수 없어요: {'; '.join(e.reasons)}")
+    finally:
+        if made:
+            bridge.rerender_affected(list(dict.fromkeys(x for b in made for x in (b["src"], b["dst"]))))
+    return {"targets": len(targets), "bridges": len(made)}
 
 
 @app.get("/debug/fs", dependencies=[Depends(require_token)])

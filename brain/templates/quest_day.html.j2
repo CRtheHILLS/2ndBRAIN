@@ -1,0 +1,79 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ plan.title_ko }} · Day {{ n }} · 2nd BRAIN</title><link rel="stylesheet" href="../../brain.css"></head>
+<body class="quest">
+<header>
+  <a href="index.html">← {{ plan.title_ko }} 지도</a>
+  <p class="kicker">Day {{ n }} / 총 {{ total }}일</p>
+  <h1>{{ lesson.big_idea_one_line }}</h1>
+  <nav class="day-nav">
+    {% if prev_n %}<a href="day-{{ prev_n }}.html">← 어제 (Day {{ prev_n }})</a>{% else %}<span></span>{% endif %}
+    {% if next_n %}<a href="day-{{ next_n }}.html">내일 (Day {{ next_n }}) →</a>{% endif %}
+  </nav>
+</header>
+<main>
+  <section class="story">
+    <h2>📖 오늘의 이야기</h2>
+    <p>{{ lesson.story_opening }}</p>
+  </section>
+
+  <h2 class="band">🔹 오늘의 점 {{ lesson.dots|length }}개</h2>
+  <div class="dots">
+    {% for d in lesson.dots %}
+    <article class="dot">
+      <figure class="pic">{% if d.svg %}{{ d.svg|safe }}{% else %}<span class="emoji" aria-hidden="true">{{ d.emoji or "🔹" }}</span>{% endif %}</figure>
+      <h3>{{ d.concept_ko }} <span class="grade grade-{{ d.evidence_grade }}">{{ d.evidence_grade }}</span></h3>
+      <p class="one-line">{{ d.one_line }}</p>
+      {% if d.analogy %}<p><b>비유로 보면</b> {{ d.analogy }}</p>{% endif %}
+      {% if d.real_example %}<p><b>진짜 예</b> {{ d.real_example }}</p>{% endif %}
+      {% if d.why_it_matters %}<p><b>왜 중요해요?</b> {{ d.why_it_matters }}</p>{% endif %}
+      {% if d.links %}<p class="src">원문:{% for u in d.links %} <a href="{{ u }}" target="_blank" rel="noopener">[{{ loop.index }}]</a>{% endfor %}</p>
+      {% else %}<p class="src"><span class="grade nosrc">출처 없음 — 확인 필요</span></p>{% endif %}
+    </article>
+    {% endfor %}
+  </div>
+
+  {% if lesson.quiz %}
+  <section class="quiz">
+    <h2>❓ 오늘의 퀴즈</h2>
+    <p class="muted">먼저 머릿속으로 답해 보고, 눌러서 정답을 확인해요.</p>
+    {% for item in lesson.quiz %}
+    <details><summary>{{ loop.index }}. {{ item.q }}</summary>
+      <p><b>정답</b> {{ item.a }}</p>{% if item.why %}<p class="muted">{{ item.why }}</p>{% endif %}
+    </details>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  {% if lesson.say_it_yourself %}
+  <section class="say">
+    <h2>🗣️ 내 말로 설명해 보기</h2>
+    <p>{{ lesson.say_it_yourself }}</p>
+  </section>
+  {% endif %}
+
+  {% if lesson.link_yesterday %}
+  <section>
+    <h2>🔗 어제와 잇기</h2>
+    <p>{{ lesson.link_yesterday }}</p>
+  </section>
+  {% endif %}
+
+  <section>
+    <h2>🌉 다른 때 배운 것과 잇기</h2>
+    {% if bridges %}<ul>{% for b in bridges %}<li><b>{{ b.src_label }}</b> ↔ <b>{{ b.dst_label }}</b>{% if b.dst_books %} <span class="muted">({{ b.dst_books|join(', ') }}에서 배움)</span>{% endif %}{% if b.reason %} — {{ b.reason }}{% endif %}</li>{% endfor %}</ul>
+    {% else %}<p class="muted">아직 없어요. 다른 주제를 배우면 여기에 저절로 이어져요.</p>{% endif %}
+  </section>
+
+  {% if lesson.clair_one_liner %}
+  <section class="clair">
+    <h2>💕 클레어의 한마디</h2>
+    <p>{{ lesson.clair_one_liner }}</p>
+  </section>
+  {% endif %}
+
+  <nav class="day-nav">
+    {% if prev_n %}<a href="day-{{ prev_n }}.html">← 어제 (Day {{ prev_n }})</a>{% else %}<a href="index.html">← 지도</a>{% endif %}
+    {% if next_n %}<a href="day-{{ next_n }}.html">내일 (Day {{ next_n }}) →</a>{% else %}<a href="index.html">지도로 →</a>{% endif %}
+  </nav>
+</main>
+</body></html>
