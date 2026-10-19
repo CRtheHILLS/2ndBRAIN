@@ -458,3 +458,52 @@ def test_index_rebuild_route_requires_token(data_dir):
         assert c.post("/index/rebuild").status_code in (401, 403)
         r = c.post("/index/rebuild", headers={"X-Brain-Token": "test-token"})
     assert r.status_code == 200 and r.json()["indexed"] >= 1
+
+
+def _pending_upload(c, monkeypatch):
+    from brain import ocr
+    from brain.config import get_settings
+    monkeypatch.setenv("THINK_PROVIDERS", "gemini")
+    get_settings.cache_clear()
+    r = c.post("/upload", headers={"X-Brain-Token": "test-token"}, data={"book": "책"},
+               files={"file": ("p.jpg", b"\xff\xd8abc", "image/jpeg")})
+    assert r.status_code == 200
+    return r.json(), ocr.list_pending()
+
+
+def test_upload_image_without_ocr_is_pending(data_dir, monkeypatch):
+    from api.main import app
+    with TestClient(app) as c:
+        j, q = _pending_upload(c, monkeypatch)
+    assert j["ocr"] == "pending" and len(q) == 1
+
+
+def test_upload_text_reports_ocr_none(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        r = c.post("/upload", headers={"X-Brain-Token": "test-token"}, data={"book": "책"},
+                   files={"file": ("a.txt", b"hi")})
+    assert r.json()["ocr"] == "none"
+
+
+def test_ocr_routes_need_token(data_dir):
+    from api.main import app
+    with TestClient(app) as c:
+        assert c.get("/ocr/pending").status_code == 401
+        assert c.get("/ocr/file/x").status_code == 401
+        assert c.post("/ocr/x", json={"text": "a"}).status_code == 401
+
+
+def test_ocr_flow_pending_file_submit(data_dir, monkeypatch):
+    from api.main import app
+    h = {"X-Brain-Token": "test-token"}
+    with TestClient(app) as c:
+        _, q = _pending_upload(c, monkeypatch)
+        eid = q[0]["id"]
+        assert c.get("/ocr/pending", headers=h).json()[0]["id"] == eid
+        f = c.get(f"/ocr/file/{eid}", headers=h)
+        assert f.status_code == 200 and f.content == b"\xff\xd8abc"
+        assert c.post("/ocr/nope", headers=h, json={"text": "a"}).status_code == 404
+        r = c.post(f"/ocr/{eid}", headers=h, json={"text": "읽은 글"})
+        assert r.status_code == 200 and r.json()["ocr"] == "done"
+        assert c.get("/ocr/pending", headers=h).json() == []

@@ -46,9 +46,7 @@ def test_raw_bytes_written_before_llm_call(data_dir, monkeypatch):
     def _boom(b, m):
         raise RuntimeError("llm exploded")
     monkeypatch.setattr(ingest.llm, "ocr_image", _boom)
-    import pytest
-    with pytest.raises(RuntimeError):
-        ingest.ingest_file("cosmos", "IMG_2.jpg", b"\xff\xd8fake")
+    ingest.ingest_file("cosmos", "IMG_2.jpg", b"\xff\xd8fake")  # provider error -> pending, no raise
     assert (store.raw_dir("cosmos") / "IMG_2.jpg").exists()
 
 def test_cp949_text_is_decoded(data_dir):

@@ -61,6 +61,14 @@ def fetch_json(method, path, *, url, token, json_body=None, params=None, timeout
         raise RuntimeError("서버 답을 읽지 못했어요. 주소가 맞는지 확인해 주세요.")
 
 
+def fetch_bytes(path, *, url, token, timeout=120):
+    """파일(사진) 하나를 내려받아 바이트로 돌려줘요. (테스트에서는 이 함수를 대체해요)"""
+    r = httpx.get(url.rstrip("/") + path, headers={"X-Brain-Token": token}, timeout=timeout)
+    if r.status_code >= 400:
+        raise RuntimeError(f"서버 응답 {r.status_code}: 파일을 내려받지 못했어요")
+    return r.content
+
+
 def _env_candidates():
     return [Path.cwd() / ".env", Path(__file__).resolve().parent.parent / ".env"]
 
@@ -286,6 +294,57 @@ def cmd_ask(ctx, ns):
     return 0
 
 
+_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+        "image/heic": ".heic", "image/heif": ".heif", "application/pdf": ".pdf"}
+
+
+def cmd_ocr_list(ctx, ns):
+    rows = ctx.call("GET", "/ocr/pending")
+    if not rows:
+        print("읽어 줄 사진이 없어요.")
+        return 0
+    print(f"{'id':<14} {'책':<20} {'파일':<28} 올린 때")
+    for r in rows:
+        print(f"{r.get('id', '')[:12]:<14} {r.get('book', ''):<20} {r.get('file', ''):<28} "
+              f"{str(r.get('added_at', ''))[:16]}")
+    return 0
+
+
+def _resolve_ocr_id(ctx, prefix):
+    rows = ctx.call("GET", "/ocr/pending")
+    hits = [r for r in rows if r.get("id", "").startswith(prefix)]
+    if len(hits) != 1:
+        raise RuntimeError("그 번호의 대기 항목을 찾지 못했어요" if not hits else "번호가 여러 개와 맞아요. 더 길게 써 주세요")
+    return hits[0]
+
+
+def cmd_ocr_get(ctx, ns):
+    entry = _resolve_ocr_id(ctx, ns.id)
+    content = fetch_bytes(f"/ocr/file/{entry['id']}", url=ctx.url, token=ctx.token)
+    out = Path(ns.out)
+    out.mkdir(parents=True, exist_ok=True)
+    ext = Path(entry.get("file", "")).suffix or _EXT.get(entry.get("mime", ""), ".bin")
+    img = out / f"{entry['id']}{ext}"
+    img.write_bytes(content)
+    txt = out / f"{entry['id']}.txt"
+    txt.write_text(f"(이 파일에 읽은 글자를 적고 `brain-learn ocr submit {entry['id']} {txt.name}`로 제출해요. "
+                   "이 안내 줄은 지워도 돼요.)\n", encoding="utf-8")
+    print(f"저장했어요: {img}\n글자를 적을 파일: {txt}")
+    return 0
+
+
+def cmd_ocr_submit(ctx, ns):
+    try:
+        text = Path(ns.file).read_text("utf-8")
+    except OSError as e:
+        print(f"파일을 읽지 못했어요: {e}", file=sys.stderr)
+        return 2
+    entry = _resolve_ocr_id(ctx, ns.id)
+    r = ctx.call("POST", f"/ocr/{entry['id']}", json_body={"text": text})
+    print(f"받았어요 ({r.get('book')} / {r.get('file')}). 학습 대기열에 올렸어요.")
+    return 0
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="brain-learn", description="한 문장으로 배우기 — 학습 퀘스트 도구")
     p.add_argument("--url", default=None, help="서버 주소 (명령 앞에 써요. 기본: BRAIN_URL 환경변수 또는 .env)")
@@ -339,6 +398,19 @@ def build_parser():
     s.add_argument("--mode", choices=["auto", "vault", "web"], default="auto", help="찾는 곳 (기본: auto)")
     s.add_argument("--level", choices=["초등", "일반", "전문"], default="초등", help="눈높이 (기본: 초등)")
     s.set_defaults(fn=cmd_ask)
+
+    s = sub.add_parser("ocr", help="사진 글자 읽기 대기열 (list · get · submit)")
+    osub = s.add_subparsers(dest="ocr_cmd", required=True, metavar="하위명령")
+    o = osub.add_parser("list", help="읽어 줄 사진 목록")
+    o.set_defaults(fn=cmd_ocr_list)
+    o = osub.add_parser("get", help="사진을 내려받고 글자를 적을 txt를 만들어요")
+    o.add_argument("id", help="항목 번호(앞 몇 글자만 써도 돼요)")
+    o.add_argument("--out", required=True, help="저장할 폴더")
+    o.set_defaults(fn=cmd_ocr_get)
+    o = osub.add_parser("submit", help="읽은 글자(txt 파일)를 제출해요")
+    o.add_argument("id", help="항목 번호(앞 몇 글자만 써도 돼요)")
+    o.add_argument("file", help="글자가 들어 있는 txt 파일")
+    o.set_defaults(fn=cmd_ocr_submit)
     return p
 
 
