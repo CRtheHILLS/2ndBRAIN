@@ -47,13 +47,12 @@ def main() -> int:
         learned = r.json() if r.status_code == 200 else {}
         print("분류:", json.dumps(learned, ensure_ascii=False)[:600])
 
-        if ns.no_bridge:
-            return 0
-        r = c.post(f"{url}/graph/rebridge", headers=hdr, params={"limit": 20})
-        if r.status_code != 200:
-            print(f"다리 놓기 건너뜀 {r.status_code}: {r.text[:160]}")
-            return 0
-        print(f"새 다리 {r.json().get('bridges', 0)}개 (후보 {r.json().get('targets', 0)}개 살핌)")
+        if not ns.no_bridge:
+            r = c.post(f"{url}/graph/rebridge", headers=hdr, params={"limit": 20})
+            if r.status_code != 200:
+                print(f"다리 놓기 미룸 {r.status_code}: {r.text[:160]}")
+            else:
+                print(f"새 다리 {r.json().get('bridges', 0)}개 (후보 {r.json().get('targets', 0)}개 살핌)")
 
         # 새 개념마다 이웃을 보여 줘요: 예전 자료·개념과 어디서 닿았는지 한눈에
         for cid in learned.get("new_concepts", []) or []:
